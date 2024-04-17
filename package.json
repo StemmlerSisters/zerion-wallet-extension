@@ -102,7 +102,7 @@
     "buffer": "^6.0.3",
     "canvas-confetti": "^1.6.0",
     "capitalize-ts": "^1.0.0",
-    "classnames": "^2.3.2",
+    "classnames": "^2.5.1",
     "dayjs": "^1.11.9",
     "defi-sdk": "^0.1.0-alpha.75",
     "downshift": "^7.6.0",
