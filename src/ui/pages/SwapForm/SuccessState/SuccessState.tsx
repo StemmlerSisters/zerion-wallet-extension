@@ -19,7 +19,10 @@ import { TextAnchor } from 'src/ui/ui-kit/TextAnchor';
 import { Media } from 'src/ui/ui-kit/Media';
 import { TokenIcon } from 'src/ui/ui-kit/TokenIcon';
 import { formatTokenValue } from 'src/shared/units/formatTokenValue';
+import { FEATURE_LOYALTY_FLOW } from 'src/env/config';
+import { useRemoteConfigValue } from 'src/modules/remote-config/useRemoteConfigValue';
 import type { BareAddressPosition } from '../BareAddressPosition';
+import { GasbackDecorated } from '../../SendForm/SuccessState/SuccessState';
 
 function SwapVisualization({
   spendPosition,
@@ -74,11 +77,13 @@ export function SuccessState({
   receivePosition,
   hash,
   onDone,
+  gasbackValue,
 }: {
   swapFormState: SwapFormState;
   spendPosition: BareAddressPosition;
   receivePosition: BareAddressPosition;
   hash: string | null;
+  gasbackValue: number | null;
   onDone: () => void;
   paddingTop?: number;
 }) {
@@ -88,7 +93,7 @@ export function SuccessState({
     chainInput && spendInput && receiveInput,
     'Required Form values are missing'
   );
-  const trail = useTrail(3, {
+  const trail = useTrail(4, {
     config: { tension: 400 },
     from: {
       opacity: 0,
@@ -99,6 +104,12 @@ export function SuccessState({
       y: 0,
     },
   });
+
+  const { data: loyaltyEnabled } = useRemoteConfigValue(
+    'extension_loyalty_enabled'
+  );
+  const FEATURE_GASBACK = loyaltyEnabled && FEATURE_LOYALTY_FLOW === 'on';
+
   if (!networks) {
     return <ViewLoading />;
   }
@@ -132,7 +143,6 @@ export function SuccessState({
                   size={20}
                   name={chainName}
                   src={networks.getNetworkByName(chain)?.icon_url}
-                  chainId={networks.getChainId(chain)}
                 />{' '}
                 {chainName}
               </HStack>
@@ -149,6 +159,14 @@ export function SuccessState({
           receivePosition={receivePosition}
         />
       </animated.div>
+      {gasbackValue && FEATURE_GASBACK ? (
+        <animated.div style={trail[3]}>
+          <div style={{ paddingInline: 32 }}>
+            <Spacer height={32} />
+            <GasbackDecorated value={gasbackValue} />
+          </div>
+        </animated.div>
+      ) : null}
       <PageBottom />
       <VStack gap={16} style={{ marginTop: 'auto', textAlign: 'center' }}>
         {hash ? (
@@ -162,7 +180,7 @@ export function SuccessState({
               rel="noopener noreferrer"
               target="_blank"
             >
-              {networks.getExplorerNameById(networks.getChainId(chain))}
+              {networks.getExplorerNameByChainName(chain)}
             </TextAnchor>
             .
           </UIText>

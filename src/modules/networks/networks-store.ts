@@ -1,101 +1,222 @@
 import { Store } from 'store-unit';
-import throttle from 'lodash/throttle';
-import { produce } from 'immer';
-import type { EthereumChainSources } from './Networks';
+import { type Client } from 'defi-sdk';
+import type { ChainId } from '../ethereum/transactions/ChainId';
+import { isCustomNetworkId } from '../ethereum/chains/helpers';
+import type { EthereumChainConfig } from '../ethereum/chains/types';
 import { Networks } from './Networks';
-import { get as getNetworks } from './networks-api';
-import { chainsInfo } from './networks-fallback';
+import { getNetworkByChainId, getNetworks } from './networks-api';
+import type { NetworkConfig } from './NetworkConfig';
+import { toNetworkConfig } from './helpers';
 
 interface State {
   networks: Networks | null;
 }
 
-export class NetworksStore extends Store<State> {
-  private loaderPromise: Promise<Networks> | null = null;
-  private getEthereumChainSources:
-    | null
-    | (() => Promise<EthereumChainSources | undefined>);
+function mergeNetworkConfigs(
+  prevConfigs: NetworkConfig[],
+  nextConfigs: NetworkConfig[]
+) {
+  const nextConfigMap = Object.fromEntries(
+    nextConfigs.map((config) => [config.id, config])
+  );
+  const prevConfigsSet = new Set(prevConfigs.map((item) => item.id));
+  return [
+    ...prevConfigs.map((config) => nextConfigMap[config.id] ?? config),
+    ...nextConfigs.filter((config) => !prevConfigsSet.has(config.id)),
+  ];
+}
 
-  private needsRetry = true;
+type OtherNetworkData = {
+  ethereumChainConfigs: EthereumChainConfig[];
+  visitedChains: string[] | null;
+};
+
+export class NetworksStore extends Store<State> {
+  private isReady = false;
+  private networkConfigs: NetworkConfig[] = [];
+  private customNetworkConfigs: NetworkConfig[] = [];
+  private loaderPromises: Record<string, Promise<Networks>> = {};
+  client: Client;
+  testnetMode: boolean;
+  private getOtherNetworkData:
+    | null
+    | (() => Promise<OtherNetworkData | undefined>);
 
   constructor(
     state: State,
     {
-      getEthereumChainSources,
+      getOtherNetworkData,
+      client,
+      testnetMode,
     }: {
-      getEthereumChainSources?: NetworksStore['getEthereumChainSources'];
-    } = {}
+      getOtherNetworkData?: NetworksStore['getOtherNetworkData'];
+      client: Client;
+      testnetMode: boolean;
+    }
   ) {
     super(state);
-    this.getEthereumChainSources = getEthereumChainSources ?? null;
+    this.getOtherNetworkData = getOtherNetworkData ?? null;
+    this.client = client;
+    this.testnetMode = testnetMode;
   }
 
-  private prepareNetworkConfigTypes(
-    ethereumChainSources?: EthereumChainSources
-  ): EthereumChainSources | undefined {
-    if (!ethereumChainSources) {
-      return undefined;
-    }
-    return produce(ethereumChainSources, (draft) => {
-      draft.custom?.ethereumChains?.forEach((chainConfig) => {
-        if (chainConfig.value.native_asset?.decimals) {
-          // there was a problem where some native_token decimals were saved as string
-          chainConfig.value.native_asset.decimals = Number(
-            chainConfig.value.native_asset.decimals
-          );
-        }
-      });
+  toString() {
+    return this.client.url;
+  }
+
+  private async updateNetworks() {
+    const chainConfigs = await this.getOtherNetworkData?.();
+    const savedChainConfigs = chainConfigs?.ethereumChainConfigs;
+    const visitedChains = chainConfigs?.visitedChains;
+    const networks = new Networks({
+      networks: mergeNetworkConfigs(
+        this.networkConfigs,
+        this.customNetworkConfigs
+      ),
+      ethereumChainConfigs: savedChainConfigs || [],
+      visitedChains: visitedChains || [],
     });
+    this.setState({ networks });
+    return networks;
   }
 
-  private async fetchAndUpdate() {
-    return Promise.allSettled([
-      getNetworks(),
-      this.getEthereumChainSources?.(),
-    ]).then(([networksValue, ethereumChainSources]) => {
-      const networks = new Networks({
-        networks:
-          networksValue.status === 'fulfilled'
-            ? networksValue.value
-            : chainsInfo,
-        ethereumChainSources:
-          ethereumChainSources.status === 'fulfilled'
-            ? this.prepareNetworkConfigTypes(ethereumChainSources.value)
-            : undefined,
-      });
-      this.setState({ networks });
-      this.needsRetry = networksValue.status === 'rejected';
-      return networks;
-    });
-  }
-
-  async load(): Promise<Networks> {
-    if (!this.loaderPromise) {
-      this.loaderPromise = this.fetchAndUpdate();
+  private async fetchNetworks({
+    chains = [],
+    update,
+    testnetMode,
+  }: {
+    chains?: string[];
+    update?: boolean;
+    testnetMode: boolean;
+  }) {
+    const existingNetworksCollection =
+      this.getState().networks?.getNetworksCollection();
+    const shouldUpdateNetworksInfo =
+      update || chains.some((id) => !existingNetworksCollection?.[id]);
+    const existingNetworks = this.getState().networks;
+    if (!shouldUpdateNetworksInfo && existingNetworks) {
+      return existingNetworks;
     }
-    return this.loaderPromise
-      .then(() => {
-        const { networks } = this.getState();
-        if (!networks) {
-          throw new Error('networks are expected to be not null after load()');
-        }
-        if (this.needsRetry) {
-          this.retry();
-        }
-        return networks;
-      })
-      .catch((error) => {
-        this.loaderPromise = null;
-        throw error;
+
+    const chainConfigs = await this.getOtherNetworkData?.();
+    const savedChainConfigs = chainConfigs?.ethereumChainConfigs;
+    const visitedChains = chainConfigs?.visitedChains || [];
+    const savedIds = savedChainConfigs?.map((config) => config.id) || [];
+    const chainsToFetch = Array.from(
+      new Set(
+        [...savedIds, ...chains, ...visitedChains].filter(
+          (id) => !isCustomNetworkId(id)
+        )
+      )
+    );
+
+    const [extraNetworkConfigs, commonNetworkConfigs] =
+      await Promise.allSettled([
+        getNetworks({
+          ids: chainsToFetch,
+          client: this.client,
+          include_testnets: true,
+          supported_only: false,
+        }),
+        update
+          ? Promise.resolve([])
+          : getNetworks({
+              ids: null,
+              client: this.client,
+              include_testnets: testnetMode,
+              supported_only: true,
+            }),
+      ]);
+
+    const updatedNetworkConfigs = mergeNetworkConfigs(
+      commonNetworkConfigs.status === 'fulfilled'
+        ? commonNetworkConfigs.value
+        : [],
+      extraNetworkConfigs.status === 'fulfilled'
+        ? extraNetworkConfigs.value
+        : []
+    );
+
+    this.networkConfigs = mergeNetworkConfigs(
+      this.networkConfigs,
+      updatedNetworkConfigs
+    );
+    const fulfilledNetworkIdSet = new Set(
+      this.networkConfigs.map(({ id }) => id)
+    );
+    this.customNetworkConfigs =
+      savedChainConfigs
+        ?.filter((config) => !fulfilledNetworkIdSet.has(config.id))
+        .map((config) => toNetworkConfig(config.value, config.id)) || [];
+
+    return this.updateNetworks();
+  }
+
+  private async fetchNetworkById(chainId: ChainId) {
+    if (!this.isReady) {
+      await this.load();
+    }
+    const shouldUpdateNetworksInfo = this.getState()
+      .networks?.getNetworks()
+      .every((network) => Networks.getChainId(network) !== chainId);
+    const existingNetworks = this.getState().networks;
+    if (!shouldUpdateNetworksInfo && existingNetworks) {
+      return existingNetworks;
+    }
+    const network = await getNetworkByChainId(chainId, this.client);
+    if (network) {
+      this.networkConfigs = mergeNetworkConfigs(this.networkConfigs, [network]);
+    }
+    return this.updateNetworks();
+  }
+
+  async pushConfigs(...extraNetworkConfigs: NetworkConfig[]) {
+    this.networkConfigs = mergeNetworkConfigs(
+      this.networkConfigs,
+      extraNetworkConfigs
+    );
+    return this.updateNetworks();
+  }
+
+  async load({ chains }: { chains?: string[] } = {}) {
+    const key = JSON.stringify(chains || []);
+    if (!this.loaderPromises[key]) {
+      this.loaderPromises[key] = this.fetchNetworks({
+        chains,
+        /**
+         * NOTE: due to fetchNetworks implementation, {testnetMode} param is important only when
+         * {chains} param is undefined. {testnetMode} param helps to fill networkStore initially for testnetMode
+         */
+        testnetMode: this.testnetMode,
+      }).finally(() => {
+        delete this.loaderPromises[key];
+        this.isReady = true;
       });
+    }
+    return this.loaderPromises[key];
+  }
+
+  async loadNetworksByChainId(chainId: ChainId) {
+    const key = `chainId-${chainId}`;
+    if (!this.loaderPromises[key]) {
+      this.loaderPromises[key] = this.fetchNetworkById(chainId).finally(() => {
+        delete this.loaderPromises[key];
+      });
+    }
+    return this.loaderPromises[key];
   }
 
   async update() {
-    this.loaderPromise = null;
-    return this.fetchAndUpdate();
+    const key = 'update';
+    if (!this.loaderPromises[key]) {
+      this.loaderPromises[key] = this.fetchNetworks({
+        update: true,
+        /** testnetMode value does not matter when update: true ¯\_(ツ)_/¯ */
+        testnetMode: this.testnetMode,
+      }).finally(() => {
+        delete this.loaderPromises[key];
+      });
+    }
+    return this.loaderPromises[key];
   }
-
-  retry = throttle(() => {
-    this.fetchAndUpdate();
-  }, 15000);
 }

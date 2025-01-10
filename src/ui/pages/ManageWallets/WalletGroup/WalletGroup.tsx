@@ -1,5 +1,5 @@
 import React, { useCallback, useId, useRef, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { isTruthy } from 'is-truthy-ts';
 import type { WalletGroup } from 'src/shared/types/WalletGroup';
@@ -21,7 +21,10 @@ import { PageBottom } from 'src/ui/components/PageBottom';
 import { CircleSpinner } from 'src/ui/ui-kit/CircleSpinner';
 import { Button } from 'src/ui/ui-kit/Button';
 import { WarningIcon } from 'src/ui/components/WarningIcon';
-import { useWalletGroups } from 'src/ui/shared/requests/useWalletGroups';
+import {
+  useWalletGroup,
+  useWalletGroups,
+} from 'src/ui/shared/requests/useWalletGroups';
 import { useDebouncedCallback } from 'src/ui/shared/useDebouncedCallback';
 import { UnstyledInput } from 'src/ui/ui-kit/UnstyledInput';
 import type { HTMLDialogElementInterface } from 'src/ui/ui-kit/ModalDialogs/HTMLDialogElementInterface';
@@ -33,20 +36,30 @@ import { WalletAvatar } from 'src/ui/components/WalletAvatar';
 import { InputDecorator } from 'src/ui/ui-kit/Input/InputDecorator';
 import { BackupInfoNote } from 'src/ui/components/BackupInfoNote';
 import {
+  ContainerType,
+  getContainerType,
   isHardwareContainer,
   isMnemonicContainer,
-  isPrivateKeyContainer,
   isSignerContainer,
 } from 'src/shared/types/validators';
 import { NeutralDecimals } from 'src/ui/ui-kit/NeutralDecimals';
+import { openHrefInTabView } from 'src/ui/shared/openUrl';
+import { useCurrency } from 'src/modules/currency/useCurrency';
 
-function useWalletGroup({ groupId }: { groupId: string }) {
-  return useQuery({
-    queryKey: [`wallet/uiGetWalletGroup/${groupId}`],
-    queryFn: () => walletPort.request('uiGetWalletGroup', { groupId }),
-    useErrorBoundary: true,
-  });
-}
+const strings = {
+  recoveryPhraseTitle: 'Recovery Phrase',
+  privateKeyTitle: 'Private Key',
+  getRemoveWalletSubtitle: (containerType: ContainerType) =>
+    containerType === ContainerType.mnemonic
+      ? 'You can always import it again using your recovery phrase'
+      : containerType === ContainerType.privateKey
+      ? 'You can always import it again using your private key'
+      : containerType === ContainerType.hardware
+      ? 'You can import it again by connecting your hardware wallet'
+      : containerType === ContainerType.readonly
+      ? 'You can always add it back to your watch list'
+      : 'You can add it again on the Manage Wallets page',
+};
 
 function EditableWalletGroupName({
   id,
@@ -111,10 +124,16 @@ function RemoveGroupConfirmationDialog({
 }: {
   walletGroup: WalletGroup;
 }) {
+  const containerType = getContainerType(walletGroup.walletContainer);
   return (
     <form
       method="dialog"
-      style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 24,
+        height: '100%',
+      }}
     >
       <VStack gap={8}>
         <WarningIcon
@@ -126,8 +145,7 @@ function RemoveGroupConfirmationDialog({
         />
         <UIText kind="headline/h3">Did you backup your recovery phrase?</UIText>
         <UIText kind="body/regular">
-          You will need your recovery phrase to import this group of wallets in
-          the future
+          {strings.getRemoveWalletSubtitle(containerType)}
         </UIText>
         <UIText kind="small/accent" color="var(--neutral-500)">
           Wallets to remove
@@ -171,6 +189,7 @@ function RemoveGroupConfirmationDialog({
 
 export function WalletGroup() {
   const navigate = useNavigate();
+  const { currency } = useCurrency();
   const { groupId } = useParams();
   const dialogRef = useRef<HTMLDialogElementInterface | null>(null);
   if (!groupId) {
@@ -197,29 +216,16 @@ export function WalletGroup() {
       </>
     );
   }
-  // const { seedType } = walletGroup.walletContainer;
   const { walletContainer } = walletGroup;
   const isSignerGroup = isSignerContainer(walletContainer);
   const isMnemonicGroup = isMnemonicContainer(walletContainer);
-  const isPrivateKeyGroup = isPrivateKeyContainer(walletContainer);
   const isHardwareGroup = isHardwareContainer(walletContainer);
-
-  const strings = {
-    recoveryPhraseTitle: 'Recovery Phrase',
-    privateKeyTitle: 'Private Key',
-    removeWalletSubtitle: isMnemonicGroup
-      ? 'You can always import it again using your recovery phrase'
-      : isPrivateKeyGroup
-      ? 'You can always import it again using your private key'
-      : isHardwareGroup
-      ? 'You can import it again by connecting your hardware wallet'
-      : 'You can add it again on the Manage Wallets page',
-  };
+  const containerType = getContainerType(walletContainer);
 
   return (
     <PageColumn>
       <NavigationTitle title={getGroupDisplayName(walletGroup.name)} />
-      <BottomSheetDialog ref={dialogRef}>
+      <BottomSheetDialog ref={dialogRef} height="fit-content">
         <RemoveGroupConfirmationDialog walletGroup={walletGroup} />
       </BottomSheetDialog>
       <PageTop />
@@ -246,7 +252,8 @@ export function WalletGroup() {
               items={[
                 {
                   key: 1,
-                  to: `/backup-wallet?groupId=${walletGroup.id}&backupKind=verify`,
+                  to: `/backup?groupId=${walletGroup.id}`,
+                  onClick: openHrefInTabView,
                   component: (
                     <HStack
                       gap={4}
@@ -299,14 +306,14 @@ export function WalletGroup() {
                       detailText={
                         <PortfolioValue
                           address={wallet.address}
-                          render={(entry) => (
+                          render={(query) => (
                             <UIText kind="headline/h2">
-                              {entry.value ? (
+                              {query.data ? (
                                 <NeutralDecimals
                                   parts={formatCurrencyToParts(
-                                    entry.value.total_value || 0,
+                                    query.data.data?.totalValue || 0,
                                     'en',
-                                    'usd'
+                                    currency
                                   )}
                                 />
                               ) : (
@@ -362,7 +369,7 @@ export function WalletGroup() {
             ]}
           />
           <UIText kind="caption/regular" color="var(--neutral-500)">
-            {strings.removeWalletSubtitle}
+            {strings.getRemoveWalletSubtitle(containerType)}
           </UIText>
         </VStack>
       </VStack>

@@ -1,10 +1,11 @@
-import { JsonRpcProvider } from '@json-rpc-tools/provider';
+import { JsonRpcProvider } from '@walletconnect/jsonrpc-provider';
 import type {
   JsonRpcPayload,
   JsonRpcRequest,
   RequestArguments,
-} from '@json-rpc-tools/utils';
-import { formatJsonRpcRequest, isJsonRpcError } from '@json-rpc-tools/utils';
+} from '@walletconnect/jsonrpc-utils';
+import { isJsonRpcError } from '@walletconnect/jsonrpc-utils';
+import { formatJsonRpcRequestPatched } from 'src/shared/custom-rpc/formatJsonRpcRequestPatched';
 import { InvalidParams, MethodNotImplemented } from 'src/shared/errors/errors';
 import { WalletNameFlag } from 'src/shared/types/WalletNameFlag';
 import type { Connection } from './connection';
@@ -19,10 +20,10 @@ function accountsEquals(arr1: string[], arr2: string[]) {
 
 async function fetchInitialState(connection: Connection) {
   return Promise.all([
-    connection.send<string>(formatJsonRpcRequest('eth_chainId', [])),
-    connection.send<string[]>(formatJsonRpcRequest('eth_accounts', [])),
+    connection.send<string>(formatJsonRpcRequestPatched('eth_chainId', [])),
+    connection.send<string[]>(formatJsonRpcRequestPatched('eth_accounts', [])),
     connection.send<WalletNameFlag[]>(
-      formatJsonRpcRequest('wallet_getWalletNameFlags', {
+      formatJsonRpcRequestPatched('wallet_getWalletNameFlags', {
         origin: window.location.origin,
       })
     ),
@@ -35,7 +36,8 @@ async function fetchInitialState(connection: Connection) {
 
 class MetamaskExperimentalNamespace {
   isUnlocked() {
-    throw new MethodNotImplemented('_metamask.isUnlocked: Not implemented');
+    return true;
+    // throw new MethodNotImplemented('_metamask.isUnlocked: Not implemented');
   }
 
   requestBatch() {
@@ -53,11 +55,18 @@ export class EthereumProvider extends JsonRpcProvider {
   networkVersion: string;
   isZerion = true;
   isMetaMask?: boolean;
-  // Metamask provides this proxy with few experimantal functions
-  // Some dapps rely on it's methods (e.g. app.hop.exchange)
+  // Metamask provides this proxy with few experimental functions
+  // Some dapps rely on its methods (e.g. app.hop.exchange)
   _metamask?: MetamaskExperimentalNamespace;
   connection: Connection;
   _openPromise: Promise<void> | null = null;
+
+  nonEip6963Request = false;
+
+  prefersOtherWalletStrategy?: (params: {
+    request: RequestArguments & { id?: number };
+    originalError: Error;
+  }) => Promise<unknown>;
 
   constructor(connection: Connection) {
     super(connection);
@@ -113,6 +122,10 @@ export class EthereumProvider extends JsonRpcProvider {
     this._metamask = new MetamaskExperimentalNamespace();
   }
 
+  unmarkAsMetamask() {
+    this.isMetaMask = false;
+  }
+
   private async _prepareState() {
     return fetchInitialState(this.connection).then(
       ({ chainId, accounts, walletNameFlags }) => {
@@ -140,10 +153,30 @@ export class EthereumProvider extends JsonRpcProvider {
     if (request.method === 'eth_accounts' && this.accounts.length) {
       return Promise.resolve(this.accounts);
     }
-    return this._getRequestPromise(
-      formatJsonRpcRequest(request.method, request.params || [], request.id),
+    let params = request.params;
+    if (request.method === 'eth_requestAccounts' && this.nonEip6963Request) {
+      params = [
+        {
+          ...(request.params || [])[0],
+          nonEip6963Request: this.nonEip6963Request,
+        },
+        ...(request.params || []).slice(1),
+      ];
+    }
+    const promise = this._getRequestPromise(
+      formatJsonRpcRequestPatched(request.method, params || [], request.id),
       context
     );
+    if (request.method === 'eth_requestAccounts' && this.nonEip6963Request) {
+      return promise.catch((originalError) => {
+        if (this.prefersOtherWalletStrategy) {
+          return this.prefersOtherWalletStrategy({ request, originalError });
+        } else {
+          throw originalError;
+        }
+      });
+    }
+    return promise;
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

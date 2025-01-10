@@ -7,16 +7,20 @@ import { BackgroundScriptUpdateHandler } from 'src/shared/core/BackgroundScriptU
 import { initializeClientAnalytics } from 'src/shared/analytics/analytics.client';
 import { HandshakeFailed } from 'src/shared/errors/errors';
 import { runtimeStore } from 'src/shared/core/runtime-store';
+import { initializeSidepanelEvents } from 'src/shared/sidepanel/initialize.client';
 import { applyDrawFix } from './shared/applyDrawFix';
 import { App } from './App';
 import type { AppProps } from './App/App';
 import { initialize as initializeChannels } from './shared/channels';
 import { queryClient } from './shared/requests/queryClient';
 import { emitter } from './shared/events';
-import { maybeOpenOboarding } from './Onboarding/initialization';
-import { OnboardingInterrupt } from './Onboarding/errors';
+import { persistQueryClient } from './shared/requests/queryClientPersistence';
+import { getPreferences } from './features/preferences/usePreferences';
+import { OnboardingInterrupt } from './features/onboarding/errors';
+import { maybeOpenOnboarding } from './features/onboarding/initialization';
 
 applyDrawFix();
+initializeSidepanelEvents();
 if (process.env.NODE_ENV === 'development') {
   console.time('UI render'); // eslint-disable-line no-console
   console.time('UI render effect'); // eslint-disable-line no-console
@@ -39,7 +43,7 @@ async function registerServiceWorker() {
 
 let reactRoot: Root | null = null;
 
-function renderApp({ initialView, mode, inspect }: AppProps) {
+function renderApp({ initialView, inspect }: AppProps) {
   const root = document.getElementById('root');
   if (!root) {
     throw new Error('#root element not found');
@@ -51,23 +55,31 @@ function renderApp({ initialView, mode, inspect }: AppProps) {
   reactRoot = createRoot(root);
   reactRoot.render(
     <React.StrictMode>
-      <App initialView={initialView} mode={mode} inspect={inspect} />
+      <App initialView={initialView} inspect={inspect} />
     </React.StrictMode>
   );
 }
 
+let isFirstLoad = true;
 async function initializeUI({
   initialView,
   inspect,
 }: Pick<AppProps, 'initialView' | 'inspect'> = {}) {
+  const innerIsFirstLoad = isFirstLoad;
+  isFirstLoad = false;
   try {
     await registerServiceWorker();
     initializeChannels();
-    const { mode } = await maybeOpenOboarding();
-    queryClient.clear();
+    await maybeOpenOnboarding();
+    if (innerIsFirstLoad) {
+      await persistQueryClient(queryClient);
+    } else {
+      queryClient.clear();
+    }
+    await getPreferences(); // seed queryClient. TODO before merge: do we need this?
     await configureUIClient();
     initializeClientAnalytics();
-    renderApp({ initialView, mode, inspect });
+    renderApp({ initialView, inspect });
   } catch (error) {
     if (error instanceof OnboardingInterrupt) {
       // do nothing

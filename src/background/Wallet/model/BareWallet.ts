@@ -1,7 +1,9 @@
-import type { ethers } from 'ethers';
 import type { ExternallyOwnedAccount } from './AccountContainer';
+import type { MaskedSignerObject, SignerObject } from './SignerObject';
 
-export interface BareWallet extends ExternallyOwnedAccount {
-  mnemonic: { phrase: string; path: string } | null;
-  privateKey: ethers.Wallet['privateKey'];
-}
+// TODO: rename BareWallet to SignerWallet?
+export interface BareWallet extends ExternallyOwnedAccount, SignerObject {}
+
+export interface MaskedBareWallet
+  extends ExternallyOwnedAccount,
+    MaskedSignerObject {}

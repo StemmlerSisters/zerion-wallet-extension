@@ -38,10 +38,20 @@ import { DialogTitle } from 'src/ui/ui-kit/ModalDialogs/DialogTitle';
 import { ZStack } from 'src/ui/ui-kit/ZStack';
 import * as helperStyles from 'src/ui/style/helpers.module.css';
 import { useCustomValidity } from 'src/ui/shared/forms/useCustomValidity';
+import { useCurrency } from 'src/modules/currency/useCurrency';
+import GasIcon from 'jsx:src/ui/assets/gas.svg';
+import { useNetworks } from 'src/modules/networks/useNetworks';
 import type { BareAddressPosition } from '../../SwapForm/BareAddressPosition';
 import * as styles from './styles.module.css';
 
-function ResultItem({ addressAsset }: { addressAsset: BareAddressPosition }) {
+function ResultItem({
+  addressAsset,
+  isGasAsset,
+}: {
+  addressAsset: BareAddressPosition;
+  isGasAsset: boolean;
+}) {
+  const { currency } = useCurrency();
   const { asset } = addressAsset;
   const { price } = asset;
   const quantityCommon = baseToCommon(
@@ -52,28 +62,78 @@ function ResultItem({ addressAsset }: { addressAsset: BareAddressPosition }) {
     })
   );
   const details = [
-    `${formatTokenValue(quantityCommon)} ${asset.symbol}`,
-    price ? formatCurrencyValue(price.value, 'en', 'usd') : null,
+    `${formatTokenValue(quantityCommon)}`,
+    asset.symbol,
+    price ? formatCurrencyValue(price.value, 'en', currency) : null,
   ].filter(Boolean);
+
   return (
     <HStack gap={4} justifyContent="space-between" alignItems="center">
       <Media
         image={
           <TokenIcon size={36} src={asset.icon_url} symbol={asset.symbol} />
         }
-        text={<UIText kind="body/accent">{asset.name}</UIText>}
+        text={
+          <HStack
+            gap={4}
+            alignItems="center"
+            style={{
+              gridTemplateColumns: isGasAsset ? '1fr auto' : '1fr',
+              justifySelf: 'start',
+            }}
+            title={asset.name}
+          >
+            <UIText
+              kind="body/accent"
+              style={{
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+              }}
+            >
+              {asset.name}
+            </UIText>
+            {isGasAsset ? (
+              <div title="Token is used to cover gas fees">
+                <GasIcon style={{ display: 'block', width: 20, height: 20 }} />
+              </div>
+            ) : null}
+          </HStack>
+        }
         vGap={0}
         detailText={
           <UIText kind="small/regular" color="var(--neutral-700)">
-            {details[0]}
-            {details.length > 1 ? ' · ' : null}
-            {details[1]}
+            <HStack
+              gap={4}
+              style={{
+                gridTemplateColumns:
+                  'minmax(min-content, max-content) auto 1fr',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {details[0]}
+              <div
+                style={{
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                }}
+              >
+                {details[1]}
+              </div>
+              {details.length > 2 ? ' · ' : null}
+              {details[2]}
+            </HStack>
           </UIText>
         }
       />
       {price ? (
         <UIText kind="body/accent" color="var(--black)">
-          {formatCurrencyValue(quantityCommon.times(price.value), 'en', 'usd')}
+          {formatCurrencyValue(
+            quantityCommon.times(price.value),
+            'en',
+            currency
+          )}
         </UIText>
       ) : null}
     </HStack>
@@ -82,6 +142,7 @@ function ResultItem({ addressAsset }: { addressAsset: BareAddressPosition }) {
 
 export interface Props {
   items: BareAddressPosition[];
+  filterItemsLocally?: boolean;
   noItemsMessage: string;
   isLoading?: boolean;
   getGroupName?: (item: BareAddressPosition) => string;
@@ -124,9 +185,17 @@ const isButtonOptionItem = (
     : false;
 };
 
-const Option = React.memo(({ item }: { item: BareAddressPosition }) => {
-  return <ResultItem addressAsset={item} />;
-});
+const Option = React.memo(
+  ({
+    item,
+    isGasAsset,
+  }: {
+    item: BareAddressPosition;
+    isGasAsset: boolean;
+  }) => {
+    return <ResultItem addressAsset={item} isGasAsset={isGasAsset} />;
+  }
+);
 
 function matches(inputValue: string | null, { asset }: BareAddressPosition) {
   if (!inputValue) {
@@ -135,7 +204,8 @@ function matches(inputValue: string | null, { asset }: BareAddressPosition) {
   const value = inputValue.toLowerCase();
   return (
     normalizedContains(asset.name.toLowerCase(), value) ||
-    normalizedContains(asset.symbol.toLowerCase(), value)
+    normalizedContains(asset.symbol.toLowerCase(), value) ||
+    normalizedContains(asset.asset_code.toLowerCase(), value)
   );
 }
 
@@ -175,6 +245,7 @@ const rootNode = getRootDomNode();
 
 function AssetSelectComponent({
   items: allItems,
+  filterItemsLocally = true,
   isLoading,
   noItemsMessage,
   selectedItem,
@@ -206,10 +277,9 @@ function AssetSelectComponent({
 
   const items = useMemo(() => {
     let result: typeof allItems = [];
-    if (!query || !isCombobox) {
+    if (!query || !isCombobox || !filterItemsLocally) {
       result = allItems;
     } else {
-      // TODO: do not locally filter Market Asset List
       result = allItems.filter((item) => matches(query, item));
     }
     const loadMoreButton: LoadMoreOption = {
@@ -217,7 +287,7 @@ function AssetSelectComponent({
       index: result.length,
     };
     return [...result, ...(hasMore ? [loadMoreButton] : [])];
-  }, [hasMore, query, isCombobox, allItems]);
+  }, [hasMore, query, isCombobox, allItems, filterItemsLocally]);
 
   const { optionItems, groupIndexes } = useMemo(() => {
     let lastGroupName: string | null = null;
@@ -391,6 +461,12 @@ function AssetSelectComponent({
       chain,
     });
 
+  const { networks } = useNetworks();
+  const gasAssetId = useMemo(() => {
+    const network = chain ? networks?.getNetworkByName(chain) : null;
+    return network?.native_asset?.id;
+  }, [networks, chain]);
+
   const listItems: Item[] = virtualList.getVirtualItems().map((row) => {
     const optionItem = optionItems[row.index];
     if (optionItem.type === ItemType.group) {
@@ -453,7 +529,7 @@ function AssetSelectComponent({
               },
             })}
           >
-            <Option item={item} />
+            <Option item={item} isGasAsset={item.asset.id === gasAssetId} />
           </SurfaceItemButton>
         ),
       };
@@ -518,7 +594,7 @@ function AssetSelectComponent({
             tabIndex: 0,
             type: 'button',
             className: styles.select,
-            style: { display: 'block' },
+            style: { display: 'block', overflowWrap: 'break-word' },
           })}
           {...(isCombobox ? {} : getInputProps())}
         >
@@ -538,7 +614,7 @@ function AssetSelectComponent({
                   selectedItem.asset.symbol.length > 8 ? '0.8em' : undefined,
               }}
             >
-              {selectedItem.asset.symbol.toUpperCase()}
+              {selectedItem.asset.symbol}
               <DownIcon
                 width={24}
                 height={24}

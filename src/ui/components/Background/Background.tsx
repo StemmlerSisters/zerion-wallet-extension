@@ -11,7 +11,7 @@ function setStyleProperty(node: HTMLElement, key: string, value: unknown) {
   }
 }
 
-function getStylePropery(node: HTMLElement, key: string) {
+function getStyleProperty(node: HTMLElement, key: string) {
   if (key.startsWith('--')) {
     return node.style.getPropertyValue(key);
   } else {
@@ -28,7 +28,7 @@ export function useBodyStyle(style: React.CSSProperties) {
       const key = untypedKey as keyof typeof style;
       if (key in prevValuesRef.current === false) {
         // @ts-ignore
-        prevValuesRef.current[key] = getStylePropery(document.body, key);
+        prevValuesRef.current[key] = getStyleProperty(document.body, key);
       }
       setStyleProperty(document.body, key, style[key]);
     }
@@ -50,11 +50,11 @@ const bgClassNames = {
   transparent: 'transparent-bg',
 } as const;
 
-export function useBackgroundKind({
-  kind,
-}: {
-  kind: 'neutral' | 'white' | 'transparent';
-}) {
+type Props = { kind: 'neutral' | 'white' | 'transparent' };
+
+export const whiteBackgroundKind: Props = { kind: 'white' };
+
+export function useBackgroundKind({ kind }: Props) {
   const { uiScrollRootElement } = useContext(UIContext);
 
   useEffect(() => {
@@ -67,6 +67,7 @@ export function useBackgroundKind({
 }
 
 /** TODO: Deprecate <Background /> in favour of useBackgroundKind() */
+/** @deprecated */
 export function Background({
   children,
   backgroundColor,

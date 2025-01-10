@@ -2,61 +2,62 @@ import browser from 'webextension-polyfill';
 import { createNanoEvents } from 'nanoevents';
 import { produce } from 'immer';
 import { isTruthy } from 'is-truthy-ts';
-import type { GlobalPreferences } from './Wallet/GlobalPreferences';
+import { difference } from 'src/shared/difference';
+import {
+  globalPreferences,
+  type GlobalPreferences,
+} from './Wallet/GlobalPreferences';
 
-function difference<T>(a: T[], b: T[]) {
-  const set = new Set(b);
-  return a.filter((value) => !set.has(value));
-}
-
-function setActiveIcon() {
+function setActiveIcon({ tabId }: { tabId?: number }) {
   if (process.env.NODE_ENV === 'development') {
     browser.action.setIcon({
+      tabId,
       path: new URL(
-        `../images/logo-icon-dev-128.png`,
+        '../images/logo-icon-dev-128.png',
         import.meta.url
       ).toString(),
     });
   } else {
     browser.action.setIcon({
+      tabId,
       path: {
-        16: new URL(`../images/logo-icon-16.png`, import.meta.url).toString(),
-        32: new URL(`../images/logo-icon-32.png`, import.meta.url).toString(),
-        48: new URL(`../images/logo-icon-48.png`, import.meta.url).toString(),
-        128: new URL(`../images/logo-icon-128.png`, import.meta.url).toString(),
+        16: new URL('../images/logo-icon-16.png', import.meta.url).toString(),
+        32: new URL('../images/logo-icon-32.png', import.meta.url).toString(),
+        48: new URL('../images/logo-icon-48.png', import.meta.url).toString(),
+        128: new URL('../images/logo-icon-128.png', import.meta.url).toString(),
       },
     });
   }
-  browser.action.setBadgeText({ text: '' });
+  browser.action.setBadgeText({ tabId, text: '' });
 }
 
-function setPausedIcon() {
+function setPausedIcon({ tabId }: { tabId?: number }) {
   browser.action.setIcon({
+    tabId,
     path: {
       16: new URL(
-        `../images/logo-icon-16-disabled.png`,
+        '../images/logo-icon-16-disabled.png',
         import.meta.url
       ).toString(),
       32: new URL(
-        `../images/logo-icon-32-disabled.png`,
+        '../images/logo-icon-32-disabled.png',
         import.meta.url
       ).toString(),
       48: new URL(
-        `../images/logo-icon-48-disabled.png`,
+        '../images/logo-icon-48-disabled.png',
         import.meta.url
       ).toString(),
       128: new URL(
-        `../images/logo-icon-128-disabled.png`,
+        '../images/logo-icon-128-disabled.png',
         import.meta.url
       ).toString(),
     },
   });
-  browser.action.setBadgeText({ text: '!' });
-  browser.action.setBadgeBackgroundColor({ color: '#FF9D1C' });
+  browser.action.setBadgeText({ tabId, text: '!' });
+  browser.action.setBadgeBackgroundColor({ tabId, color: '#FF9D1C' });
 }
 
 export class ContentScriptManager {
-  private globalPreferences: GlobalPreferences;
   private providerInjection: GlobalPreferences['state']['providerInjection'];
   static ALARM_NAME = 'provider-injection';
   static emitter = createNanoEvents<{ alarm: () => void }>();
@@ -67,8 +68,7 @@ export class ContentScriptManager {
     }
   }
 
-  constructor(globalPreferences: GlobalPreferences) {
-    this.globalPreferences = globalPreferences;
+  constructor() {
     ContentScriptManager.emitter.on('alarm', () => {
       this.removeExpiredRecords();
     });
@@ -76,7 +76,7 @@ export class ContentScriptManager {
 
   removeExpiredRecords() {
     const now = Date.now();
-    this.globalPreferences.setState((state) =>
+    globalPreferences.setState((state) =>
       produce(state, (draft) => {
         if (draft.providerInjection) {
           for (const key in draft.providerInjection) {
@@ -103,9 +103,9 @@ export class ContentScriptManager {
       !matches ||
       (origin && excludeMatches?.some((item) => item.includes(origin)))
     ) {
-      setPausedIcon();
+      setPausedIcon({ tabId: tab?.id });
     } else {
-      setActiveIcon();
+      setActiveIcon({ tabId: tab?.id });
     }
   }
 
@@ -135,8 +135,8 @@ export class ContentScriptManager {
   activate() {
     // TODO: may be call this.removeExpiredRecords() here instead of outside
     this.handleChange();
-    this.globalPreferences.on('change', this.handleChange.bind(this));
-    this.globalPreferences.on('change', this.setAndDiscardAlarms.bind(this));
+    globalPreferences.on('change', this.handleChange.bind(this));
+    globalPreferences.on('change', this.setAndDiscardAlarms.bind(this));
     this.updateActionIcon();
   }
 
@@ -166,7 +166,7 @@ export class ContentScriptManager {
   }
 
   async handleChange() {
-    const { providerInjection } = await this.globalPreferences.getPreferences();
+    const { providerInjection } = await globalPreferences.getPreferences();
     if (providerInjection !== this.providerInjection) {
       this.providerInjection = providerInjection;
       this.update();
@@ -198,6 +198,7 @@ export class ContentScriptManager {
     await chrome.scripting.registerContentScripts([
       {
         id: 'zerion-extension-content-script',
+        allFrames: true,
         js: inPageScriptLocation.resources,
         excludeMatches,
         matches,

@@ -23,9 +23,19 @@ import { NeutralDecimals } from 'src/ui/ui-kit/NeutralDecimals';
 import { formatCurrencyToParts } from 'src/shared/units/formatCurrencyValue';
 import { NBSP } from 'src/ui/shared/typography';
 import { getWalletDisplayName } from 'src/ui/shared/getWalletDisplayName';
+import { opaqueType } from 'src/shared/type-utils/Opaque';
+import type { LocallyEncoded } from 'src/shared/wallet/encode-locally';
 import type { DeviceConnection } from '../types';
 
 type ControllerRequest = Omit<RpcRequest, 'id'>;
+
+// We don't have access to preference-store inside iframe and can't use useCurrency hook
+function getIframeCurrency() {
+  const pageUrl = new URL(window.location.href);
+  const currencyStateParam = pageUrl.searchParams.get('currency');
+  invariant(currencyStateParam, 'currency param is requred');
+  return currencyStateParam;
+}
 
 function WalletMediaPresentation({
   wallet,
@@ -34,6 +44,8 @@ function WalletMediaPresentation({
   wallet: ExternallyOwnedAccount;
   walletInfo?: WalletInfo;
 }) {
+  const currency = useMemo(getIframeCurrency, []);
+
   return (
     <Media
       image={
@@ -54,7 +66,7 @@ function WalletMediaPresentation({
               parts={formatCurrencyToParts(
                 walletInfo?.portfolio ?? 0,
                 'en',
-                'usd'
+                currency
               )}
             />
           ) : (
@@ -149,10 +161,12 @@ function AddressSelectList({
     items.map((item) => ({
       address: item.account.address,
       name: null,
-      privateKey: '<ledger-private-key>',
+      // we're not gonna read this prop and only need to match type
+      privateKey: opaqueType<LocallyEncoded>('<ledger-private-key>'),
       mnemonic: {
         path: item.derivationPath,
-        phrase: '<ledger-mnemonic>',
+        // we're not gonna read this prop and only need to match type
+        phrase: opaqueType<LocallyEncoded>('<ledger-mnemonic>'),
       },
     }))
   );

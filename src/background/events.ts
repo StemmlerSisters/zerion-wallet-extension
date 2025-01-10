@@ -1,14 +1,19 @@
 import type { ethers } from 'ethers';
 import { createNanoEvents } from 'nanoevents';
-import type { AnyAddressAction } from 'src/modules/ethereum/transactions/addressAction';
 import type { TypedData } from 'src/modules/ethereum/message-signing/TypedData';
-import type { NetworkConfig } from 'src/modules/networks/NetworkConfig';
-import type { Quote } from 'src/shared/types/Quote';
+import type { Chain } from 'src/modules/networks/Chain';
+import type {
+  MessageContextParams,
+  TransactionContextParams,
+} from 'src/shared/types/SignatureContextParams';
+import type { AddEthereumChainParameter } from 'src/modules/ethereum/types/AddEthereumChainParameter';
+import type { ChainId } from 'src/modules/ethereum/transactions/ChainId';
+import type { ButtonClickedParams } from 'src/shared/types/button-events';
 import type { State as GlobalPreferencesState } from './Wallet/GlobalPreferences';
 import type { WalletOrigin } from './Wallet/model/WalletOrigin';
 import type { WalletContainer } from './Wallet/model/types';
 
-type TransactionResponse = ethers.providers.TransactionResponse;
+type TransactionResponse = ethers.TransactionResponse;
 
 export interface ScreenViewParams {
   pathname: string;
@@ -25,38 +30,53 @@ export interface DaylightEventParams {
 
 export const emitter = createNanoEvents<{
   accountsChanged: () => void;
-  chainChanged: () => void;
-  transactionSent: (data: {
-    transaction: TransactionResponse;
-    initiator: string;
-    feeValueCommon: string | null;
-    addressAction: AnyAddressAction | null;
-    quote?: Quote;
-  }) => void;
-  typedDataSigned: (data: {
-    typedData: TypedData;
-    initiator: string;
-    address: string;
-  }) => void;
-  messageSigned: (data: {
+  chainsUpdated: () => void;
+  chainChanged: (chain: Chain, origin: string) => void;
+  'ui:chainSelected': (chain: Chain) => void;
+  globalError: (data: {
+    name: 'network_error' | 'signing_error';
     message: string;
-    initiator: string;
-    address: string;
   }) => void;
+  switchChainError: (chainId: ChainId, origin: string, error: unknown) => void;
+  transactionSent: (
+    data: {
+      transaction: TransactionResponse;
+      mode: 'default' | 'testnet';
+    } & TransactionContextParams
+  ) => void;
+  typedDataSigned: (
+    data: { typedData: TypedData; address: string } & MessageContextParams
+  ) => void;
+  messageSigned: (
+    data: { message: string; address: string } & MessageContextParams
+  ) => void;
   userActivity: () => void;
   connectToSiteEvent: (info: { origin: string }) => void;
   sessionExpired: () => void;
-  dappConnection: (data: { origin: string; address: string }) => void;
+  requestAccountsResolved: (data: {
+    origin: string;
+    address: string;
+    /** {explicitly: true} means that user confirmed connection in a dialog. {false} means that we resolve a previously approved addess value */
+    explicitly: boolean;
+  }) => void;
   screenView: (data: ScreenViewParams) => void;
+  firstScreenView: (timestamp: number) => void;
   daylightAction: (data: DaylightEventParams) => void;
   walletCreated: (wallet: {
     walletContainer: WalletContainer;
     origin: WalletOrigin;
     groupId: string | null;
   }) => void;
-  addEthereumChain: (data: { values: [NetworkConfig]; origin: string }) => void;
+  addEthereumChain: (data: {
+    values: [AddEthereumChainParameter];
+    origin: string;
+  }) => void;
   globalPreferencesChange: (
     state: GlobalPreferencesState,
     prevState: GlobalPreferencesState
   ) => void;
+  holdToSignPreferenceChange: (active: boolean) => void;
+  eip6963SupportDetected: (data: { origin: string }) => void;
+  uiClosed: (data: { url: string | null }) => void;
+  buttonClicked: (data: ButtonClickedParams) => void;
 }>();

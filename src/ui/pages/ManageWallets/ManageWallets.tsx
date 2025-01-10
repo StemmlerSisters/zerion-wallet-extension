@@ -12,7 +12,7 @@ import { VStack } from 'src/ui/ui-kit/VStack';
 import type { WalletGroup } from 'src/shared/types/WalletGroup';
 import { HStack } from 'src/ui/ui-kit/HStack';
 import { AddressBadge } from 'src/ui/components/AddressBadge';
-import { Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes } from 'react-router-dom';
 import ChevronRightIcon from 'jsx:src/ui/assets/chevron-right.svg';
 import { getGroupDisplayName } from 'src/ui/shared/getGroupDisplayName';
 import { WalletDisplayName } from 'src/ui/components/WalletDisplayName';
@@ -21,22 +21,26 @@ import { EraseDataListButton } from 'src/ui/components/EraseData';
 import { WalletAvatar } from 'src/ui/components/WalletAvatar';
 import { BackupInfoNote } from 'src/ui/components/BackupInfoNote';
 import {
+  ContainerType,
+  getContainerType,
   isHardwareContainer,
-  isMnemonicContainer,
-  isPrivateKeyContainer,
-  isReadonlyContainer,
 } from 'src/shared/types/validators';
-import type { WalletContainer } from 'src/shared/types/WalletContainer';
-import { openInTabView } from 'src/ui/shared/openInTabView';
+import { openHref } from 'src/ui/shared/openUrl';
 import { NavigationTitle } from 'src/ui/components/NavigationTitle';
 import { WalletAccount as WalletAccountPage } from './WalletAccount';
 import { WalletGroup as WalletGroupPage } from './WalletGroup';
 
-function PrivateKeyList({ walletGroups }: { walletGroups: WalletGroup[] }) {
+function FlatAddressList({
+  walletGroups,
+  title,
+}: {
+  walletGroups: WalletGroup[];
+  title: React.ReactNode;
+}) {
   return (
     <VStack gap={8}>
       <UIText kind="small/accent" color="var(--neutral-500)">
-        Imported by Private Key
+        {title}
       </UIText>
       <SurfaceList
         items={walletGroups.map((group) => {
@@ -82,7 +86,10 @@ function MnemonicList({ walletGroups }: { walletGroups: WalletGroup[] }) {
           component: (
             <HStack gap={4} justifyContent="space-between" alignItems="center">
               <VStack gap={8}>
-                <UIText kind="small/accent" style={{ wordBreak: 'break-all' }}>
+                <UIText
+                  kind="small/accent"
+                  style={{ overflowWrap: 'break-word' }}
+                >
                   {getGroupDisplayName(group.name)}
                 </UIText>
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -147,29 +154,6 @@ function HardwareWalletList({ walletGroups }: { walletGroups: WalletGroup[] }) {
   );
 }
 
-enum ContainerType {
-  mnemonic,
-  privateKey,
-  hardwareDevice,
-  readonly,
-}
-
-function throwErr(error: Error): never {
-  throw error;
-}
-
-function getContainerType(container: WalletContainer): ContainerType {
-  return isMnemonicContainer(container)
-    ? ContainerType.mnemonic
-    : isPrivateKeyContainer(container)
-    ? ContainerType.privateKey
-    : isHardwareContainer(container)
-    ? ContainerType.hardwareDevice
-    : isReadonlyContainer(container)
-    ? ContainerType.readonly
-    : throwErr(new Error('Unexpected Container type'));
-}
-
 function WalletGroups() {
   const { data: walletGroups, isLoading } = useQuery({
     queryKey: ['wallet/uiGetWalletGroups'],
@@ -187,7 +171,7 @@ function WalletGroups() {
     return [
       ContainerType.mnemonic,
       ContainerType.privateKey,
-      ContainerType.hardwareDevice,
+      ContainerType.hardware,
       ContainerType.readonly,
     ]
       .filter((containerType) => grouped[containerType])
@@ -198,6 +182,10 @@ function WalletGroups() {
 
   if (isLoading) {
     return null;
+  }
+
+  if (!walletGroups?.length) {
+    return <Navigate to="/get-started?intro" replace={true} />;
   }
 
   return (
@@ -216,21 +204,31 @@ function WalletGroups() {
             {groupedBySeedType.map(([containerType, items]) => {
               if (containerType === ContainerType.privateKey) {
                 return (
-                  <PrivateKeyList key={containerType} walletGroups={items} />
+                  <FlatAddressList
+                    key={containerType}
+                    walletGroups={items}
+                    title="Imported by Private Key"
+                  />
                 );
               } else if (containerType === ContainerType.mnemonic) {
                 return (
                   <MnemonicList key={containerType} walletGroups={items} />
                 );
-              } else if (containerType === ContainerType.hardwareDevice) {
+              } else if (containerType === ContainerType.hardware) {
                 return (
                   <HardwareWalletList
                     key={containerType}
                     walletGroups={items}
                   />
                 );
-              } else {
-                return <div>Unknown seed type</div>;
+              } else if (containerType === ContainerType.readonly) {
+                return (
+                  <FlatAddressList
+                    key={containerType}
+                    walletGroups={items}
+                    title="Watchlist"
+                  />
+                );
               }
             })}
             <SurfaceList
@@ -256,10 +254,19 @@ function WalletGroups() {
                 {
                   key: 2,
                   to: '/connect-hardware-wallet',
-                  onClick: openInTabView,
+                  onClick: (event) => openHref(event, { windowType: 'tab' }),
                   component: (
                     <UIText kind="body/accent" color="var(--primary)">
                       Connect Ledger
+                    </UIText>
+                  ),
+                },
+                {
+                  key: 3,
+                  to: '/get-started/readonly',
+                  component: (
+                    <UIText kind="body/accent" color="var(--primary)">
+                      Add Watch Address
                     </UIText>
                   ),
                 },

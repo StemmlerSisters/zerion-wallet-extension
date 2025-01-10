@@ -9,16 +9,21 @@ import { TextAnchor } from 'src/ui/ui-kit/TextAnchor';
 import { UIText } from 'src/ui/ui-kit/UIText';
 import { openInNewWindow } from 'src/ui/shared/openInNewWindow';
 import { toChecksumAddress } from 'src/modules/ethereum/toChecksumAddress';
+import { NetworkIcon } from '../../NetworkIcon';
 
 export function RecipientLine({
   recipientAddress,
   chain,
   networks,
+  showNetworkIcon,
 }: {
   recipientAddress: string;
   chain: Chain;
   networks: Networks;
+  showNetworkIcon: boolean;
 }) {
+  const network = networks.getNetworkByName(chain) || null;
+
   const checksumAddress = useMemo(
     () => toChecksumAddress(recipientAddress),
     [recipientAddress]
@@ -27,7 +32,22 @@ export function RecipientLine({
     <Surface style={{ borderRadius: 8, padding: '10px 12px' }}>
       <Media
         image={
-          <BlockieImg address={checksumAddress} size={36} borderRadius={6} />
+          <div style={{ position: 'relative', overflow: 'hidden' }}>
+            <BlockieImg address={checksumAddress} size={36} borderRadius={8} />
+            {showNetworkIcon ? (
+              <div style={{ position: 'absolute', bottom: -2, right: -2 }}>
+                <NetworkIcon
+                  size={20}
+                  name={network?.name || null}
+                  src={network?.icon_url || ''}
+                  style={{
+                    borderRadius: 8,
+                    border: '2px solid var(--neutral-100)',
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
         }
         vGap={0}
         text={

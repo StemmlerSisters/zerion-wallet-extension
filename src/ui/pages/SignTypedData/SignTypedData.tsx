@@ -16,15 +16,12 @@ import { Button } from 'src/ui/ui-kit/Button';
 import { Surface } from 'src/ui/ui-kit/Surface';
 import { Background } from 'src/ui/components/Background';
 import { PageStickyFooter } from 'src/ui/components/PageStickyFooter';
-import { getError } from 'src/shared/errors/getError';
 import { invariant } from 'src/shared/invariant';
 import { TextAnchor } from 'src/ui/ui-kit/TextAnchor';
 import { HStack } from 'src/ui/ui-kit/HStack';
 import { WalletDisplayName } from 'src/ui/components/WalletDisplayName';
 import { WalletAvatar } from 'src/ui/components/WalletAvatar';
-import { KeyboardShortcut } from 'src/ui/components/KeyboardShortcut';
 import ArrowDownIcon from 'jsx:src/ui/assets/arrow-down.svg';
-import { useSignTypedData_v4Mutation } from 'src/ui/shared/requests/message-signing';
 import { prepareForHref } from 'src/ui/shared/prepareForHref';
 import type { TypedData } from 'src/modules/ethereum/message-signing/TypedData';
 import {
@@ -34,38 +31,50 @@ import {
 import type { Chain } from 'src/modules/networks/Chain';
 import { useNetworks } from 'src/modules/networks/useNetworks';
 import { setURLSearchParams } from 'src/ui/shared/setURLSearchParams';
-import { InterpretLoadingState } from 'src/ui/components/InterpretLoadingState';
 import { AddressActionDetails } from 'src/ui/components/address-action/AddressActionDetails';
 import { focusNode } from 'src/ui/shared/focusNode';
 import { interpretSignature } from 'src/modules/ethereum/transactions/interpret';
-import { PhishingDefenceStatus } from 'src/ui/components/PhishingDefence/PhishingDefenceStatus';
 import { Content, RenderArea } from 'react-area';
 import { PageBottom } from 'src/ui/components/PageBottom';
 import type { InterpretResponse } from 'src/modules/ethereum/transactions/types';
 import type { Networks } from 'src/modules/networks/Networks';
 import { PageTop } from 'src/ui/components/PageTop';
-import { CustomAllowanceView } from 'src/ui/components/CustomAllowanceView';
+import { AllowanceView } from 'src/ui/components/AllowanceView';
 import { produce } from 'immer';
 import { getFungibleAsset } from 'src/modules/ethereum/transactions/actionAsset';
 import type { ExternallyOwnedAccount } from 'src/shared/types/ExternallyOwnedAccount';
-import { useErrorBoundary } from 'src/ui/shared/useErrorBoundary';
-import { isDeviceAccount } from 'src/shared/types/validators';
 import { NavigationTitle } from 'src/ui/components/NavigationTitle';
 import { BUG_REPORT_BUTTON_HEIGHT } from 'src/ui/components/BugReportButton';
 import { requestChainForOrigin } from 'src/ui/shared/requests/requestChainForOrigin';
 import type { HTMLDialogElementInterface } from 'src/ui/ui-kit/ModalDialogs/HTMLDialogElementInterface';
 import { CenteredDialog } from 'src/ui/ui-kit/ModalDialogs/CenteredDialog';
 import { DialogTitle } from 'src/ui/ui-kit/ModalDialogs/DialogTitle';
-import { HardwareSignMessage } from '../HardwareWalletConnection/HardwareSignMessage';
+import { TextLink } from 'src/ui/ui-kit/TextLink';
+import { InterpretationState } from 'src/ui/components/InterpretationState';
+import { hasCriticalWarning } from 'src/ui/components/InterpretationState/InterpretationState';
+import type { SignMsgBtnHandle } from 'src/ui/components/SignMessageButton';
+import { SignMessageButton } from 'src/ui/components/SignMessageButton';
+import { useCurrency } from 'src/modules/currency/useCurrency';
+import { usePreferences } from 'src/ui/features/preferences';
+import { wait } from 'src/shared/wait';
+import { txErrorToMessage } from '../SendTransaction/shared/transactionErrorToMessage';
 import { TypedDataAdvancedView } from './TypedDataAdvancedView';
 
-export const TypedDataRow = React.forwardRef(
+const TypedDataRow = React.forwardRef(
   ({ data }: { data: string }, ref: React.Ref<HTMLDivElement>) => {
     return (
-      <Surface padding={16} style={{ border: '1px solid var(--neutral-300)' }}>
+      <Surface
+        padding={16}
+        style={{
+          border: '2px solid var(--neutral-200)',
+          maxHeight: 256,
+          overflowY: 'auto',
+          ['--surface-background-color' as string]: 'var(--white)',
+        }}
+      >
         <UIText
           kind="small/regular"
-          style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+          style={{ whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }}
         >
           {data}
         </UIText>
@@ -82,7 +91,11 @@ enum View {
 
 function applyAllowance(typedData: TypedData, allowanceQuantityBase: string) {
   return produce(typedData, (draft) => {
-    draft.message.value = allowanceQuantityBase;
+    if (draft.message.details) {
+      draft.message.details.amount = allowanceQuantityBase;
+    } else {
+      draft.message.value = allowanceQuantityBase;
+    }
   });
 }
 
@@ -91,16 +104,9 @@ function getPermitAllowanceQuantity({ message }: TypedData) {
   return message.value || message.details?.amount;
 }
 
-function errorToMessage(error: Error) {
-  const fallbackString = 'Unknown Error';
-  if ('message' in error) {
-    return error.message;
-  }
-  return fallbackString;
-}
-
 function TypedDataDefaultView({
   origin,
+  clientScope: clientScopeParam,
   wallet,
   chain,
   networks,
@@ -114,13 +120,14 @@ function TypedDataDefaultView({
   onOpenAdvancedView,
 }: {
   origin: string;
+  clientScope: string | null;
   wallet: ExternallyOwnedAccount;
   chain: Chain;
   networks: Networks;
   typedDataRaw: string;
   typedData: TypedData;
   interpretQuery: {
-    isLoading: boolean;
+    isInitialLoading: boolean;
     isError: boolean;
     isFetched: boolean;
   };
@@ -131,6 +138,7 @@ function TypedDataDefaultView({
   onOpenAdvancedView: () => void;
 }) {
   const [params] = useSearchParams();
+  const { preferences } = usePreferences();
 
   const addressAction = interpretation?.action;
   const recipientAddress = addressAction?.label?.display_value.wallet_address;
@@ -144,9 +152,7 @@ function TypedDataDefaultView({
     [typedDataRaw]
   );
 
-  const signTypedData_v4Mutation = useSignTypedData_v4Mutation({
-    onSuccess: onSignSuccess,
-  });
+  const signMsgBtnRef = useRef<SignMsgBtnHandle | null>(null);
 
   const originForHref = useMemo(() => prepareForHref(origin), [origin]);
 
@@ -155,31 +161,38 @@ function TypedDataDefaultView({
     [params]
   );
 
-  const showErrorBoundary = useErrorBoundary();
-  const [hardwareSignError, setHardwareSignError] = useState<Error | null>(
-    null
-  );
+  const stringifiedData = useMemo(() => {
+    const newTypedData = allowanceQuantityBase
+      ? applyAllowance(typedData, allowanceQuantityBase)
+      : typedData;
+    return JSON.stringify(newTypedData);
+  }, [allowanceQuantityBase, typedData]);
 
-  const stringifiedData = useMemo(
-    () =>
-      JSON.stringify(
-        allowanceQuantityBase
-          ? applyAllowance(typedData, allowanceQuantityBase)
-          : typedData
-      ),
-    [allowanceQuantityBase, typedData]
-  );
+  const clientScope = clientScopeParam || 'External Dapp';
 
-  const { mutate: registerTypedDataSign } = useMutation({
-    mutationFn: async (signature: string) => {
-      walletPort.request('registerTypedDataSign', {
-        rawTypedData: stringifiedData,
-        address: wallet.address,
-        initiator: origin,
-      });
-      onSignSuccess(signature);
-    },
-  });
+  const { mutate: signTypedData_v4, ...signTypedData_v4Mutation } = useMutation(
+    {
+      mutationFn: async () => {
+        invariant(signMsgBtnRef.current, 'SignMessageButton not found');
+
+        return signMsgBtnRef.current.signTypedData_v4({
+          typedData: stringifiedData,
+          initiator: origin,
+          clientScope,
+        });
+      },
+      // The value returned by onMutate can be accessed in
+      // a global onError handler (src/ui/shared/requests/queryClient.ts)
+      // TODO: refactor to just emit error directly from the mutationFn
+      onMutate: () => '_signTypedData',
+      onSuccess: async (signature) => {
+        if (preferences?.enableHoldToSignButton) {
+          await wait(500);
+        }
+        onSignSuccess(signature);
+      },
+    }
+  );
 
   const footerContentRef = useRef<HTMLDivElement | null>(null);
   const [seenSigningData, setSeenSigningData] = useState(true);
@@ -222,35 +235,13 @@ function TypedDataDefaultView({
   const scrollSigningData = () =>
     typedDataRowRef?.current?.scrollIntoView({ behavior: 'smooth' });
 
-  const submitButton = isDeviceAccount(wallet) ? (
-    <HardwareSignMessage
-      derivationPath={wallet.derivationPath}
-      message={stringifiedData}
-      type="signTypedData_v4"
-      isSigning={signTypedData_v4Mutation.isLoading}
-      onBeforeSign={() => setHardwareSignError(null)}
-      onSignError={(error) => setHardwareSignError(error)}
-      onSign={(signature) => {
-        try {
-          registerTypedDataSign(signature);
-        } catch (error) {
-          showErrorBoundary(error);
-        }
-      }}
-    />
-  ) : (
-    <Button
-      disabled={signTypedData_v4Mutation.isLoading}
-      onClick={() => {
-        signTypedData_v4Mutation.mutate({
-          typedData: stringifiedData,
-          initiator: origin,
-        });
-      }}
-    >
-      {signTypedData_v4Mutation.isLoading ? 'Signing...' : 'Sign'}
-    </Button>
+  const interpretationHasCriticalWarning = hasCriticalWarning(
+    interpretation?.warnings
   );
+
+  const showRawTypedData = !addressAction;
+
+  const shouldScrollBeforeSigning = !seenSigningData && showRawTypedData;
 
   return (
     <>
@@ -287,38 +278,51 @@ function TypedDataDefaultView({
       </div>
       <Spacer height={24} />
       <VStack gap={16}>
-        {interpretQuery.isLoading ? (
-          <InterpretLoadingState />
-        ) : interpretQuery.isError ? (
-          <UIText kind="small/regular" color="var(--notice-600)">
-            Unable to analyze the details of the transaction
-          </UIText>
-        ) : null}
         {addressAction ? (
-          <>
-            <AddressActionDetails
-              recipientAddress={recipientAddress}
-              addressAction={addressAction}
-              chain={chain}
-              networks={networks}
-              actionTransfers={addressAction?.content?.transfers}
-              wallet={wallet}
-              singleAsset={addressAction?.content?.single_asset}
-              allowanceQuantityBase={allowanceQuantityBase || undefined}
-              allowanceViewHref={allowanceViewHref}
-              // TODO: create SignMessageButton (like SignTransactionButton)
-              // and set disabled state when sign mutation is loading (see SendTransaction.tsx)
-              // disabled={...}
-            />
-            {typedDataFormatted ? (
-              <Button kind="regular" onClick={onOpenAdvancedView}>
-                Advanced View
-              </Button>
-            ) : null}
-          </>
-        ) : interpretQuery.isFetched ? (
+          <AddressActionDetails
+            recipientAddress={recipientAddress}
+            addressAction={addressAction}
+            chain={chain}
+            networks={networks}
+            actionTransfers={addressAction?.content?.transfers}
+            wallet={wallet}
+            singleAsset={addressAction?.content?.single_asset}
+            allowanceQuantityBase={allowanceQuantityBase || null}
+            showApplicationLine={true}
+            singleAssetElementEnd={
+              allowanceQuantityBase &&
+              addressAction.type.value === 'approve' ? (
+                <UIText
+                  as={TextLink}
+                  kind="small/accent"
+                  style={{ color: 'var(--primary)' }}
+                  to={allowanceViewHref}
+                >
+                  Edit
+                </UIText>
+              ) : null
+            }
+          />
+        ) : null}
+        {showRawTypedData ? (
           <TypedDataRow ref={setTypedDataRow} data={typedDataFormatted} />
         ) : null}
+        <HStack
+          gap={8}
+          style={{
+            gridTemplateColumns: interpretation?.input ? '1fr 1fr' : '1fr',
+          }}
+        >
+          <InterpretationState
+            interpretation={interpretation}
+            interpretQuery={interpretQuery}
+          />
+          {interpretation?.input ? (
+            <Button kind="regular" onClick={onOpenAdvancedView} size={36}>
+              Advanced View
+            </Button>
+          ) : null}
+        </HStack>
       </VStack>
       <Spacer height={16} />
       <Content name="sign-transaction-footer">
@@ -330,41 +334,64 @@ function TypedDataDefaultView({
             }}
             gap={8}
           >
-            <UIText kind="caption/regular" color="var(--negative-500)">
-              {signTypedData_v4Mutation.isError
-                ? getError(signTypedData_v4Mutation?.error).message
-                : hardwareSignError
-                ? errorToMessage(hardwareSignError)
-                : null}
-            </UIText>
+            {signTypedData_v4Mutation.isError ? (
+              <UIText kind="caption/regular" color="var(--negative-500)">
+                {txErrorToMessage(signTypedData_v4Mutation.error)}
+              </UIText>
+            ) : null}
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
+                gridTemplateColumns: interpretationHasCriticalWarning
+                  ? '1fr'
+                  : '1fr 1fr',
                 gap: 8,
               }}
             >
               <Button
-                kind="regular"
+                kind={interpretationHasCriticalWarning ? 'primary' : 'regular'}
                 type="button"
                 onClick={onReject}
                 ref={focusNode}
               >
                 Cancel
               </Button>
-
-              {Boolean(interpretation?.action) ||
-              interpretQuery.isLoading ||
-              seenSigningData ? (
-                submitButton
-              ) : (
-                <Button onClick={scrollSigningData}>
-                  <HStack gap={8} alignItems="center" justifyContent="center">
-                    <span>Scroll</span>
-                    <ArrowDownIcon style={{ width: 24, height: 24 }} />
-                  </HStack>
-                </Button>
-              )}
+              {preferences ? (
+                <SignMessageButton
+                  wallet={wallet}
+                  ref={signMsgBtnRef}
+                  onClick={() => {
+                    if (shouldScrollBeforeSigning) {
+                      scrollSigningData();
+                    } else {
+                      signTypedData_v4();
+                    }
+                  }}
+                  buttonKind={
+                    interpretationHasCriticalWarning ? 'danger' : 'primary'
+                  }
+                  buttonTitle={
+                    interpretationHasCriticalWarning
+                      ? 'Proceed Anyway'
+                      : undefined
+                  }
+                  children={
+                    shouldScrollBeforeSigning ? (
+                      <HStack
+                        gap={8}
+                        alignItems="center"
+                        justifyContent="center"
+                      >
+                        <span>Scroll</span>
+                        <ArrowDownIcon style={{ width: 24, height: 24 }} />
+                      </HStack>
+                    ) : null
+                  }
+                  holdToSign={
+                    preferences.enableHoldToSignButton && seenSigningData
+                  }
+                />
+              ) : null}
             </div>
           </VStack>
         </div>
@@ -375,14 +402,17 @@ function TypedDataDefaultView({
 
 function SignTypedDataContent({
   origin,
+  clientScope,
   typedDataRaw,
   wallet,
 }: {
   origin: string;
+  clientScope: string | null;
   typedDataRaw: string;
   wallet: ExternallyOwnedAccount;
 }) {
   const [params] = useSearchParams();
+  const { currency } = useCurrency();
 
   const view = params.get('view') || View.default;
   const advancedDialogRef = useRef<HTMLDialogElementInterface | null>(null);
@@ -394,14 +424,17 @@ function SignTypedDataContent({
   invariant(windowId, 'windowId get-parameter is required');
 
   const navigate = useNavigate();
-  const { networks } = useNetworks();
 
   const [allowanceQuantityBase, setAllowanceQuantityBase] = useState('');
 
   const typedData = useMemo(() => {
     const result = toTypedData(typedDataRaw);
     if (allowanceQuantityBase) {
-      result.message.value = allowanceQuantityBase;
+      if (result.message.details) {
+        result.message.details.amount = allowanceQuantityBase;
+      } else {
+        result.message.value = allowanceQuantityBase;
+      }
     }
     return result;
   }, [typedDataRaw, allowanceQuantityBase]);
@@ -415,30 +448,35 @@ function SignTypedDataContent({
     navigate(-1);
   };
 
-  const { data: chain, ...chainQuery } = useQuery({
+  const { data: chain } = useQuery({
     queryKey: ['requestChainForOrigin', origin],
     queryFn: () => requestChainForOrigin(origin),
     useErrorBoundary: true,
     suspense: true,
   });
 
+  const { networks } = useNetworks(chain ? [chain.toString()] : undefined);
+  const chainId = chain && networks ? networks.getChainId(chain) : null;
+  const network = chain && networks ? networks.getNetworkByName(chain) : null;
+
   const { data: interpretation, ...interpretQuery } = useQuery({
     queryKey: [
       'interpretSignature',
       wallet.address,
-      chain,
-      networks,
+      chainId,
       typedData,
+      currency,
     ],
     queryFn: () =>
-      chain && networks
+      chainId
         ? interpretSignature({
             address: wallet.address,
-            chainId: networks.getChainId(chain),
+            chainId,
             typedData,
+            currency,
           })
         : null,
-    enabled: !chainQuery.isLoading && Boolean(networks),
+    enabled: Boolean(chainId && network?.supports_simulations),
     suspense: false,
     retry: 1,
     refetchOnMount: false,
@@ -459,7 +497,6 @@ function SignTypedDataContent({
   return (
     <Background backgroundKind="white">
       <NavigationTitle title={null} documentTitle="Sign Typed Data" />
-      <KeyboardShortcut combination="esc" onKeyDown={handleReject} />
       <PageColumn
         // different surface color on backgroundKind="white"
         style={{
@@ -469,6 +506,7 @@ function SignTypedDataContent({
         {view === View.default ? (
           <TypedDataDefaultView
             origin={origin}
+            clientScope={clientScope}
             wallet={wallet}
             chain={chain}
             networks={networks}
@@ -486,7 +524,6 @@ function SignTypedDataContent({
         ) : null}
         <CenteredDialog
           ref={advancedDialogRef}
-          containerStyle={{ paddingBottom: 0 }}
           renderWhenOpen={() => (
             <>
               <DialogTitle
@@ -500,7 +537,7 @@ function SignTypedDataContent({
           )}
         />
         {view === View.customAllowance ? (
-          <CustomAllowanceView
+          <AllowanceView
             address={wallet.address}
             asset={getFungibleAsset(singleAsset?.asset)}
             value={allowanceQuantityBase}
@@ -509,8 +546,7 @@ function SignTypedDataContent({
             onChange={handleChangeAllowance}
           />
         ) : null}
-        <Spacer height={16} />
-        <PhishingDefenceStatus origin={origin} />
+        <RenderArea name="transaction-warning-section" />
       </PageColumn>
       <PageStickyFooter>
         <Spacer height={16} />
@@ -533,6 +569,7 @@ export function SignTypedData() {
   }
   const origin = params.get('origin');
   invariant(origin, 'origin get-parameter is required for this view');
+  const clientScope = params.get('clientScope');
 
   const typedDataRaw = params.get('typedDataRaw');
   invariant(
@@ -544,6 +581,7 @@ export function SignTypedData() {
     <SignTypedDataContent
       typedDataRaw={typedDataRaw}
       origin={origin}
+      clientScope={clientScope}
       wallet={wallet}
     />
   );

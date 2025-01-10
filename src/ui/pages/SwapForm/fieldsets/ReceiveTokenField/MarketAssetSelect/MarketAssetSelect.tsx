@@ -15,6 +15,7 @@ import { capitalize } from 'capitalize-ts';
 import { UnstyledButton } from 'src/ui/ui-kit/UnstyledButton';
 import * as helperStyles from 'src/ui/style/helpers.module.css';
 import { getAssetImplementationInChain } from 'src/modules/networks/asset';
+import { useCurrency } from 'src/modules/currency/useCurrency';
 import type { BareAddressPosition } from '../../../BareAddressPosition';
 
 export function MarketAssetSelect({
@@ -32,6 +33,7 @@ export function MarketAssetSelect({
   // takes time to query the newly selected position if it is not among address positions,
   // which results in a UI flicker. But storing an intermediary state, we avoid that flicker
   const [savedSelectedItem, setCurrentSelectedItem] = useState(selectedItem);
+  const { currency } = useCurrency();
 
   const positionsMap = useMemo(
     () =>
@@ -45,7 +47,7 @@ export function MarketAssetSelect({
     ? networks?.getNetworkByName(chain)?.native_asset?.id
     : ETH;
   const { data: popularAssetsResponse } = useAssetsPrices({
-    currency: 'usd',
+    currency,
     asset_codes: [
       nativeAssetId !== ETH ? nativeAssetId : null,
       ...popularAssetsList,
@@ -59,10 +61,10 @@ export function MarketAssetSelect({
   );
 
   const [searchAllNetworks, setSearchAllNetworks] = useState(false);
-  const shouldQueryByChain = !searchAllNetworks && chain && !query;
+  const shouldQueryByChain = !searchAllNetworks && chain;
 
   const popularPositions = useMemo(() => {
-    if (!popularAssetsResponse) {
+    if (!popularAssetsResponse || query) {
       return [];
     }
     return Object.values(popularAssetsResponse.prices)
@@ -75,7 +77,7 @@ export function MarketAssetSelect({
           ? Boolean(getAssetImplementationInChain({ chain, asset })) // exists on chain
           : true;
       });
-  }, [chain, popularAssetsResponse, positionsMap, shouldQueryByChain]);
+  }, [chain, query, popularAssetsResponse, positionsMap, shouldQueryByChain]);
 
   const {
     items: marketAssets,
@@ -85,7 +87,7 @@ export function MarketAssetSelect({
     isFetchingNextPage,
   } = useAssetsInfoPaginatedQuery(
     {
-      currency: 'usd',
+      currency,
       search_query: query,
       order_by: query ? {} : { market_cap: 'desc' },
       chain: shouldQueryByChain ? chain.toString() : null,
@@ -151,13 +153,14 @@ export function MarketAssetSelect({
   return (
     <AssetSelect
       items={items}
+      filterItemsLocally={false}
       onChange={(item) => {
         setCurrentSelectedItem(item);
         onChange(item);
       }}
       chain={chain}
       selectedItem={currentItem}
-      getGroupName={getGroupName}
+      getGroupName={query ? undefined : getGroupName}
       pagination={{
         fetchMore: fetchNextPage,
         hasMore: Boolean(hasNextPage),

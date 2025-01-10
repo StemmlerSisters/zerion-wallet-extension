@@ -4,32 +4,27 @@ import type {
   JsonRpcError,
   JsonRpcPayload,
   JsonRpcResult,
-} from '@json-rpc-tools/utils';
-import { formatJsonRpcError, isJsonRpcRequest } from '@json-rpc-tools/utils';
-import { networksStore } from 'src/modules/networks/networks-store.background';
+} from '@walletconnect/jsonrpc-utils';
+import {
+  formatJsonRpcError,
+  isJsonRpcRequest,
+} from '@walletconnect/jsonrpc-utils';
 
 export class HttpConnection extends EventEmitter {
-  private chainId: string;
+  private url: string;
 
-  constructor({ chainId }: { chainId: string }) {
+  constructor({ url }: { url: string }) {
     super();
-    /** TODO: Should we save just the URL instead of chainId? */
-    this.chainId = chainId;
+    this.url = url;
   }
 
-  async send(
-    request: JsonRpcPayload,
-    _context: unknown
-  ): Promise<JsonRpcResult | JsonRpcError> {
+  async send(request: JsonRpcPayload): Promise<JsonRpcResult | JsonRpcError> {
     if (!isJsonRpcRequest(request)) {
       console.log('not a request:', request); // eslint-disable-line no-console
       return Promise.reject('not a request');
     }
-    const networks = await networksStore.load();
 
-    const chain = networks.getChainById(this.chainId);
-    const url = networks.getRpcUrlPublic(chain);
-    return ky(url, {
+    return ky(this.url, {
       timeout: 20000,
       retry: 1,
       method: 'post',

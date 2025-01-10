@@ -18,7 +18,6 @@ import { DialogTitle } from 'src/ui/ui-kit/ModalDialogs/DialogTitle';
 import { SiteFaviconImg } from 'src/ui/components/SiteFaviconImg';
 import { invariant } from 'src/shared/invariant';
 import { focusNode } from 'src/ui/shared/focusNode';
-import { KeyboardShortcut } from 'src/ui/components/KeyboardShortcut';
 import { WalletAvatar } from 'src/ui/components/WalletAvatar';
 import CheckmarkAllowedIcon from 'jsx:src/ui/assets/checkmark-allowed.svg';
 import CheckmarkDeniedIcon from 'jsx:src/ui/assets/checkmark-denied.svg';
@@ -34,6 +33,7 @@ import { NavigationTitle } from 'src/ui/components/NavigationTitle';
 import type { WalletGroup } from 'src/shared/types/WalletGroup';
 import type { BareWallet } from 'src/shared/types/BareWallet';
 import type { DeviceAccount } from 'src/shared/types/Device';
+import { ZStack } from 'src/ui/ui-kit/ZStack';
 import { WalletList } from '../WalletSelect/WalletList';
 
 function WalletSelectDialog({
@@ -50,6 +50,7 @@ function WalletSelectDialog({
       selectedAddress={value}
       walletGroups={walletGroups}
       onSelect={onSelect}
+      showAddressValues={true}
     />
   ) : (
     <FillView>
@@ -225,9 +226,10 @@ function RequestAccountsView({
           />
         </VStack>
         <Spacer height={16} />
-        <RequestAccountsPermissions originName={originName} />
-        <Spacer height={16} />
-        <PhishingDefenceStatus origin={origin} />
+        <ZStack hideLowerElements={true}>
+          <PhishingDefenceStatus origin={origin} type="dapp" />
+          <RequestAccountsPermissions originName={originName} />
+        </ZStack>
         <div
           style={{
             display: 'grid',
@@ -308,7 +310,6 @@ export function RequestAccounts() {
   }
   return (
     <>
-      <KeyboardShortcut combination="esc" onKeyDown={handleReject} />
       <RequestAccountsView
         wallet={wallet}
         walletGroups={walletGroupsQuery.data}

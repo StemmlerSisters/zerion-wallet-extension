@@ -1,19 +1,23 @@
-import { useAddressPortfolio } from 'defi-sdk';
 import { useMemo } from 'react';
+import { useCurrency } from 'src/modules/currency/useCurrency';
+import { useHttpClientSource } from 'src/modules/zerion-api/hooks/useHttpClientSource';
+import { useWalletPortfolio } from 'src/modules/zerion-api/hooks/useWalletPortfolio';
 
 export function PortfolioValue({
   address: addressStr,
+  enabled = true,
   render,
 }: {
   address: string;
-  render: (value: ReturnType<typeof useAddressPortfolio>) => JSX.Element;
+  enabled?: boolean;
+  render: (value: ReturnType<typeof useWalletPortfolio>) => JSX.Element;
 }) {
   const address = useMemo(() => addressStr.toLowerCase(), [addressStr]);
-  const query = useAddressPortfolio({
-    address,
-    currency: 'usd',
-    portfolio_fields: 'all',
-    use_portfolio_service: true,
-  });
+  const { currency } = useCurrency();
+  const query = useWalletPortfolio(
+    { addresses: [address], currency },
+    { source: useHttpClientSource() },
+    { enabled }
+  );
   return render(query);
 }

@@ -1,9 +1,16 @@
-import { ethers } from 'ethers';
+import omit from 'lodash/omit';
 import type { Account } from 'src/background/account/Account';
 import { emitter } from 'src/background/events';
-import { networksStore } from 'src/modules/networks/networks-store.background';
 import { INTERNAL_SYMBOL_CONTEXT } from 'src/background/Wallet/Wallet';
 import { INTERNAL_ORIGIN } from 'src/background/constants';
+import { getWalletNameFlagsChange } from 'src/background/Wallet/GlobalPreferences';
+import { dnaServiceEmitter } from 'src/modules/dna-service/dna.background';
+import { WalletOrigin } from '../WalletOrigin';
+import {
+  isMnemonicContainer,
+  isPrivateKeyContainer,
+} from '../types/validators';
+import { getError } from '../errors/getError';
 import {
   createParams as createBaseParams,
   sendToMetabase,
@@ -17,8 +24,13 @@ import {
   getProviderForApiV4,
   getProviderForMetabase,
   getProviderNameFromGroup,
-} from './getProviderNameFromGroup';
+} from './shared/getProviderNameFromGroup';
 import { addressActionToAnalytics } from './shared/addressActionToAnalytics';
+import { mixpanelTrack, mixpanelIdentify, mixpanelReset } from './mixpanel';
+import {
+  getChainBreakdown,
+  getOwnedWalletsPortolio,
+} from './shared/mixpanel-data-helpers';
 
 function queryWalletProvider(account: Account, address: string) {
   const apiLayer = account.getCurrentWallet();
@@ -30,46 +42,93 @@ function queryWalletProvider(account: Account, address: string) {
 }
 
 function trackAppEvents({ account }: { account: Account }) {
+  const eip6963Dapps = new Set<string>();
+
   const getProvider = (address: string) =>
     getProviderForMetabase(queryWalletProvider(account, address));
+  const getCurrentAddress = () =>
+    account.getCurrentWallet().readCurrentAddress();
 
-  const createParams: typeof createBaseParams = (params) => {
-    const getUserId = () => account.getUser()?.id;
-    return createBaseParams({ ...params, userId: getUserId() });
+  const createParams: typeof createBaseParams = (eventParams) => {
+    const params: typeof eventParams & {
+      wallet_address?: string | null;
+      wallet_provider?: string | null;
+    } = eventParams;
+
+    if (!params.wallet_address) {
+      params.wallet_address = getCurrentAddress();
+    }
+
+    if (params.wallet_address) {
+      params.wallet_address = params.wallet_address.toLowerCase();
+      if (!params.wallet_provider) {
+        params.wallet_provider = getProvider(params.wallet_address);
+      }
+    }
+    return createBaseParams(params);
   };
-  emitter.on('dappConnection', ({ origin, address }) => {
-    // We don't need user_id here
-    const params = createBaseParams({
+
+  emitter.on('requestAccountsResolved', ({ origin, address, explicitly }) => {
+    if (!explicitly) {
+      return;
+    }
+    const params = createParams({
       request_name: 'dapp_connection',
       dapp_domain: origin,
       wallet_address: address,
-      wallet_provider: getProvider(address),
+      eip6963_supported: eip6963Dapps.has(origin),
     });
     sendToMetabase('dapp_connection', params);
+    const mixpanelParams = omit(params, ['request_name', 'wallet_address']);
+    mixpanelTrack(account, 'DApp: DApp Connection', mixpanelParams);
   });
 
-  emitter.on('screenView', (data) => {
-    // We don't need user_id here
-    const params = createBaseParams({
+  emitter.on('screenView', async (data) => {
+    const params = createParams({
       request_name: 'screen_view',
       wallet_address: data.address,
-      wallet_provider: data.address ? getProvider(data.address) : null,
       screen_name: data.pathname,
       previous_screen_name: data.previous,
       screen_size: data.screenSize,
     });
     sendToMetabase('screen_view', params);
+    const portfolio = await getOwnedWalletsPortolio(account);
+    const mixpanelParams: Record<string, unknown> = {
+      ...omit(params, ['request_name', 'wallet_address']),
+      total_balance: portfolio?.total_value ?? 0,
+      ...getChainBreakdown(portfolio),
+    };
+    mixpanelTrack(account, 'General: Screen Viewed', mixpanelParams);
+  });
+
+  emitter.on('buttonClicked', (data) => {
+    const params = createParams({
+      request_name: 'screen_view',
+      screen_name: data.pathname,
+      button_name: data.buttonName,
+    });
+    const event_name = `${data.buttonScope}: Button Pressed`;
+    const mixpanelParams = omit(params, ['request_name', 'wallet_address']);
+    mixpanelTrack(account, event_name, mixpanelParams);
   });
 
   emitter.on('daylightAction', ({ event_name, ...data }) => {
-    // We don't need user_id here (analytics requirement)
-    const params = createBaseParams({
+    const params = createParams({
       request_name: 'daylight_action',
       wallet_address: data.address,
       event_name,
       ...data,
     });
     sendToMetabase('daylight_action', params);
+  });
+
+  emitter.on('globalError', ({ name, message }) => {
+    const params = createParams({
+      request_name: 'client_error',
+      type: name,
+      message,
+    });
+    sendToMetabase('client_error', params);
   });
 
   emitter.on(
@@ -80,21 +139,32 @@ function trackAppEvents({ account }: { account: Account }) {
       feeValueCommon,
       addressAction,
       quote,
+      clientScope,
+      chain,
     }) => {
       const initiatorURL = new URL(initiator);
       const { origin, pathname } = initiatorURL;
-      const networks = await networksStore.load();
-      const chainId = ethers.utils.hexValue(transaction.chainId);
-      const chain = networks.getChainById(chainId)?.toString() || chainId;
-      const params = createBaseParams({
+      const isInternalOrigin = globalThis.location.origin === origin;
+      const initiatorName = isInternalOrigin ? 'Extension' : 'External Dapp';
+      const addressActionAnalytics = addressActionToAnalytics({
+        addressAction,
+        quote,
+      });
+      const preferences = await account
+        .getCurrentWallet()
+        .getPreferences({ context: INTERNAL_SYMBOL_CONTEXT });
+
+      const params = createParams({
         request_name: 'signed_transaction',
         screen_name: origin === initiator ? 'Transaction Request' : pathname,
         wallet_address: transaction.from,
-        wallet_provider: getProvider(transaction.from),
-        context:
-          globalThis.location.origin === origin ? 'Extension' : 'External Dapp',
-        type: 'sign',
-        dapp_domain: globalThis.location.origin === origin ? null : origin,
+        /* @deprecated */
+        context: initiatorName,
+        /* @deprecated */
+        type: 'Sign',
+        client_scope: clientScope ?? initiatorName,
+        action_type: addressActionAnalytics?.action_type ?? 'Execute',
+        dapp_domain: isInternalOrigin ? null : origin,
         chain,
         gas: transaction.gasLimit.toString(),
         hash: transaction.hash,
@@ -102,44 +172,77 @@ function trackAppEvents({ account }: { account: Account }) {
         gas_price: null, // TODO
         network_fee: null, // TODO
         network_fee_value: feeValueCommon,
-        ...addressActionToAnalytics({ addressAction, quote }),
+        contract_type: quote?.contract_metadata?.name ?? null,
+        hold_sign_button: Boolean(preferences.enableHoldToSignButton),
+        ...addressActionAnalytics,
       });
       sendToMetabase('signed_transaction', params);
+      const mixpanelParams = omit(params, [
+        'request_name',
+        'hash',
+        'wallet_address',
+      ]);
+      mixpanelTrack(account, 'Transaction: Signed Transaction', mixpanelParams);
     }
   );
 
-  function handleSign({
+  async function handleSign({
     type,
     initiator,
     address,
+    clientScope,
   }: {
     type: 'typedDataSigned' | 'messageSigned';
     initiator: string;
     address: string;
+    clientScope: string | null;
   }) {
-    if (initiator === INTERNAL_ORIGIN) {
+    if (!clientScope && initiator === INTERNAL_ORIGIN) {
       // Do not send analytics event for internal actions,
       // e.g. a signature made before an invitation fetch request
       return;
     }
     const initiatorURL = new URL(initiator);
     const { origin } = initiatorURL;
+    const isInternalOrigin = globalThis.location.origin === origin;
+    const initiatorName = isInternalOrigin ? 'Extension' : 'External Dapp';
+
+    /* @deprecated */
     const eventToMethod = {
       // values are ethers method names
       typedDataSigned: '_signTypedData',
       messageSigned: 'signMessage',
     } as const;
-    const params = createBaseParams({
+
+    const eventToActionType = {
+      typedDataSigned: 'eth_signTypedData',
+      messageSigned: 'personal_sign',
+    } as const;
+
+    const preferences = await account
+      .getCurrentWallet()
+      .getPreferences({ context: INTERNAL_SYMBOL_CONTEXT });
+
+    const params = createParams({
       request_name: 'signed_message',
+      /* @deprecated */
       type: eventToMethod[type] ?? 'unexpected type',
+      /* @deprecated */
+      context: initiatorName,
+      client_scope: clientScope ?? initiatorName,
+      action_type: eventToActionType[type] ?? 'unexpected type',
       wallet_address: address,
       address,
-      wallet_provider: getProvider(address),
-      context:
-        globalThis.location.origin === origin ? 'Extension' : 'External Dapp',
-      dapp_domain: globalThis.location.origin === origin ? null : origin,
+      dapp_domain: isInternalOrigin ? null : origin,
+      hold_sign_button: Boolean(preferences.enableHoldToSignButton),
     });
     sendToMetabase('signed_message', params);
+    const mixpanelParams = omit(params, [
+      'request_name',
+      'wallet_address',
+      'address',
+    ]);
+    mixpanelTrack(account, 'Transaction: Signed Message', mixpanelParams);
   }
 
   emitter.on('typedDataSigned', ({ typedData, ...rest }) => {
@@ -149,28 +252,26 @@ function trackAppEvents({ account }: { account: Account }) {
     handleSign({ type: 'messageSigned', ...rest });
   });
 
-  emitter.on('addEthereumChain', ({ values: [network], origin }) => {
+  // TODO: add networks-related analytics
+  emitter.on('addEthereumChain', ({ values: [chainConfig], origin }) => {
+    const wallet_address = getCurrentAddress();
     const params = createParams({
-      request_name: 'add_custom_evm',
+      request_name: 'custom_evm_network_created',
       source: origin,
-      network_external_id: network.external_id,
-      network_rpc_url_internal: network.rpc_url_internal,
-      network_name: network.name,
-      network_native_asset_symbol: network.native_asset?.symbol || null,
-      network_explorer_home_url: network.explorer_home_url,
+      network_external_id: chainConfig.chainId,
+      network_rpc_url_internal: chainConfig.rpcUrls[0],
+      network_name: chainConfig.chainName,
+      network_native_asset_symbol: chainConfig.nativeCurrency.symbol,
+      network_explorer_home_url: chainConfig.blockExplorerUrls?.[0],
+      wallet_address,
     });
-    sendToMetabase('add_custom_evm', params);
+    sendToMetabase('custom_evm_network_created', params);
   });
 
   emitter.on('globalPreferencesChange', (state, prevState) => {
     onIdle(() => {
-      const currentKeys = Object.keys(state.walletNameFlags || {});
-      const prevKeys = Object.keys(prevState.walletNameFlags || {});
-      const currentKeysSet = new Set(currentKeys);
-      const prevKeysSet = new Set(prevKeys);
-
-      const newlyEnabled = currentKeys.filter((key) => !prevKeysSet.has(key));
-      const newlyDisabled = prevKeys.filter((key) => !currentKeysSet.has(key));
+      const { enabled: newlyEnabled, disabled: newlyDisabled } =
+        getWalletNameFlagsChange(state, prevState);
 
       newlyEnabled.forEach((key) => {
         const params = createParams({
@@ -190,6 +291,53 @@ function trackAppEvents({ account }: { account: Account }) {
       });
     });
   });
+
+  emitter.on('holdToSignPreferenceChange', (active) => {
+    const params = createParams({
+      request_name: 'hold_to_sign_prerefence',
+      active,
+    });
+    const mixpanelParams = omit(params, ['request_name', 'wallet_address']);
+    mixpanelTrack(account, 'Experiments: Hold Sign Button', mixpanelParams);
+  });
+
+  emitter.on('walletCreated', ({ walletContainer, origin }) => {
+    for (const wallet of walletContainer.wallets) {
+      const type =
+        origin === WalletOrigin.extension
+          ? 'created'
+          : isPrivateKeyContainer(walletContainer)
+          ? 'imported_private_key'
+          : isMnemonicContainer(walletContainer)
+          ? 'imported_seed_phrase'
+          : 'connected';
+      const wallet_provider = getProvider(wallet.address);
+
+      const params = createParams({
+        request_name: 'add_wallet',
+        wallet_address: wallet.address.toLowerCase(),
+        type,
+      });
+      sendToMetabase('add_wallet', params);
+      mixpanelTrack(account, 'Wallet: Wallet Added', { wallet_provider, type });
+    }
+  });
+
+  emitter.on('firstScreenView', () => {
+    mixpanelTrack(account, 'General: Launch first time', {});
+  });
+
+  emitter.on('eip6963SupportDetected', ({ origin }) => {
+    eip6963Dapps.add(origin);
+  });
+
+  dnaServiceEmitter.on('registerError', async (error, action) => {
+    const request_name = 'client_error';
+    const message = getError(error).message;
+    const type = 'dna action';
+    const params = createParams({ request_name, type, message, action });
+    sendToMetabase(request_name, params);
+  });
 }
 
 export function initialize({ account }: { account: Account }) {
@@ -198,6 +346,14 @@ export function initialize({ account }: { account: Account }) {
   }
   initializeApiV4Analytics({
     willSendRequest: createAddProviderHook({ getWalletProvider }),
+  });
+  const handleUserId = () => mixpanelIdentify(account);
+  account.on('authenticated', () => handleUserId());
+  if (account.getUser()) {
+    handleUserId();
+  }
+  account.on('reset', () => {
+    mixpanelReset();
   });
   return trackAppEvents({ account });
 }

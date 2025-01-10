@@ -1,6 +1,7 @@
 import React, { useImperativeHandle, useRef } from 'react';
+import { ethers } from 'ethers';
 import type { IncomingTransaction } from 'src/modules/ethereum/types/IncomingTransaction';
-import { Button } from 'src/ui/ui-kit/Button';
+import { Button, type Kind as ButtonKind } from 'src/ui/ui-kit/Button';
 import { useMutation } from '@tanstack/react-query';
 import { invariant } from 'src/shared/invariant';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -11,12 +12,67 @@ import type { SignTransactionResult } from 'src/ui/hardware-wallet/types';
 import LedgerIcon from 'jsx:src/ui/assets/ledger-icon.svg';
 import { LedgerIframe } from 'src/ui/hardware-wallet/LedgerIframe';
 import { HStack } from 'src/ui/ui-kit/HStack';
-import { getTransactionCount } from 'src/modules/ethereum/transactions/getTransactionCount';
+import { uiGetBestKnownTransactionCount } from 'src/modules/ethereum/transactions/getBestKnownTransactionCount/uiGetBestKnownTransactionCount';
 import type { Chain } from 'src/modules/networks/Chain';
 import type { Networks } from 'src/modules/networks/Networks';
-import { networksStore } from 'src/modules/networks/networks-store.client';
+import { getNetworksStore } from 'src/modules/networks/networks-store.client';
 import { TextPulse } from 'src/ui/components/TextPulse';
+import {
+  createTypedData,
+  serializePaymasterTx,
+} from 'src/modules/ethereum/account-abstraction/createTypedData';
 import { hardwareMessageHandler } from '../shared/messageHandler';
+
+async function signRegularOrPaymasterTx({
+  messageHandler,
+  transaction: incomingTx,
+  derivationPath,
+  contentWindow,
+}: {
+  messageHandler: typeof hardwareMessageHandler;
+  transaction: IncomingTransaction;
+  derivationPath: string;
+  contentWindow: Window;
+}): Promise<SignTransactionResult> {
+  const paymasterEligible = Boolean(incomingTx.customData?.paymasterParams);
+  const transaction = prepareTransaction(incomingTx);
+  if (paymasterEligible) {
+    const typedData = createTypedData(transaction);
+
+    const ledgerSignature = await messageHandler.request<string>(
+      {
+        id: nanoid(),
+        method: 'signTypedData_v4',
+        params: { derivationPath, typedData },
+      },
+      contentWindow
+    );
+    /**
+     * Ethereum signature's `v` value can either be in range [0, 1] or [27, 28]
+     * Both signatures can be valid, so this historically allowed for double spends.
+     * Some systems decided to check this and accept only one kind.
+     * Currently our own ledger adapter code subtracts 27 (to conform to some dapp's expectations),
+     * but zkSync stack seems to expect [27, 28]
+     * Therefore we add this number for this particular case
+     */
+    const s = ethers.Signature.from(ledgerSignature);
+    if ((s.v as number) === 0 || (s.v as number) === 1) {
+      s.v += 27;
+    }
+    const signature = ethers.Signature.from(s).serialized;
+    const rawTransaction = serializePaymasterTx({ transaction, signature });
+    return { serialized: rawTransaction };
+  } else {
+    return await messageHandler.request<SignTransactionResult>(
+      {
+        id: nanoid(),
+        method: 'signTransaction',
+        params: { derivationPath, transaction },
+      },
+      contentWindow
+    );
+  }
+}
 
 interface SignTransactionParams {
   transaction: IncomingTransaction;
@@ -24,7 +80,7 @@ interface SignTransactionParams {
   chain: Chain;
 }
 
-export interface SignHandle {
+export interface SignTransactionHandle {
   signTransaction: ({
     transaction,
     address,
@@ -45,16 +101,18 @@ async function prepareForSignByLedger({
 }) {
   const value = { ...transaction };
   if (value.nonce == null) {
-    const { value: nonce } = await getTransactionCount({
+    const { value: nonce } = await uiGetBestKnownTransactionCount({
       address,
       chain,
       networks,
       defaultBlock: 'pending',
     });
-    value.nonce = parseInt(nonce);
+    value.nonce = nonce;
   }
   if (!value.chainId) {
-    value.chainId = networks.getChainId(chain);
+    const chainId = networks.getChainId(chain);
+    invariant(chainId, 'Unable to find chainId for transaction');
+    value.chainId = chainId;
   }
   return value;
 }
@@ -65,12 +123,16 @@ export const HardwareSignTransaction = React.forwardRef(
       derivationPath,
       isSending,
       children,
+      buttonTitle,
+      buttonKind = 'primary',
       ...buttonProps
     }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
       derivationPath: string;
       isSending: boolean;
+      buttonTitle?: React.ReactNode;
+      buttonKind?: ButtonKind;
     },
-    ref: React.Ref<SignHandle>
+    ref: React.Ref<SignTransactionHandle>
   ) {
     const navigate = useNavigate();
     const location = useLocation();
@@ -83,7 +145,10 @@ export const HardwareSignTransaction = React.forwardRef(
         address,
         chain,
       }: SignTransactionParams): Promise<string> => {
-        const networks = await networksStore.load();
+        const networksStore = await getNetworksStore();
+        const networks = await networksStore.load({
+          chains: [chain.toString()],
+        });
         const txForLedger = await prepareForSignByLedger({
           transaction,
           address,
@@ -97,18 +162,12 @@ export const HardwareSignTransaction = React.forwardRef(
           'Iframe contentWindow is not available'
         );
         try {
-          const result =
-            await hardwareMessageHandler.request<SignTransactionResult>(
-              {
-                id: nanoid(),
-                method: 'signTransaction',
-                params: {
-                  derivationPath,
-                  transaction: normalizedTransaction,
-                },
-              },
-              iframeRef.current.contentWindow
-            );
+          const result = await signRegularOrPaymasterTx({
+            transaction: normalizedTransaction,
+            messageHandler: hardwareMessageHandler,
+            derivationPath,
+            contentWindow: iframeRef.current.contentWindow,
+          });
           return result.serialized;
         } catch (error) {
           const normalizedError = getError(error);
@@ -154,7 +213,7 @@ export const HardwareSignTransaction = React.forwardRef(
           </Button>
         ) : (
           <Button
-            kind="primary"
+            kind={buttonKind}
             disabled={signMutation.isLoading || isSending}
             style={{
               paddingInline: 16, // fit longer button label
@@ -164,7 +223,7 @@ export const HardwareSignTransaction = React.forwardRef(
             <HStack gap={8} alignItems="center" justifyContent="center">
               <LedgerIcon />
               {children || // all this will definitely be refactored soon
-                (isSending ? 'Sending' : 'Sign with Ledger')}
+                (isSending ? 'Sending' : buttonTitle || 'Sign with Ledger')}
             </HStack>
           </Button>
         )}

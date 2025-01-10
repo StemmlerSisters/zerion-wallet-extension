@@ -1,13 +1,9 @@
 import { ethers } from 'ethers';
 import RLP from 'rlp';
-import type { OptimisticGasPriceInfo } from '../requests';
-
-interface Transaction {
-  data?: string;
-  to?: string;
-  gas?: string | number;
-  value?: string | number;
-}
+import type { IncomingTransaction } from 'src/modules/ethereum/types/IncomingTransaction';
+import { valueToHex } from 'src/shared/units/valueToHex';
+import type { ChainGasPrice } from '../types';
+import type { GasPriceObject } from '../GasPriceObject';
 
 function bufferToHex(buffer: Uint8Array) {
   return Array.from(buffer)
@@ -16,7 +12,7 @@ function bufferToHex(buffer: Uint8Array) {
 }
 
 function bytesLength(str: string) {
-  return ethers.utils.arrayify(str).length;
+  return ethers.getBytes(str).length;
 }
 
 function countZeroBytes(str: string) {
@@ -34,42 +30,76 @@ interface OptimisticFee {
 }
 
 export async function createOptimisticFee({
-  optimisticGasPriceInfo,
+  gasPriceInfo,
   transaction,
+  gasLimit,
   getNonce,
+  gasPriceObject,
 }: {
-  optimisticGasPriceInfo: OptimisticGasPriceInfo;
-  transaction: Transaction;
+  gasPriceInfo: ChainGasPrice['fast'];
+  gasLimit: string | number;
+  transaction: IncomingTransaction;
+  gasPriceObject: GasPriceObject | null;
   getNonce: () => Promise<number>;
 }): Promise<OptimisticFee | null> {
-  const { l1, l2, fixed_overhead, dynamic_overhead } = optimisticGasPriceInfo;
-  if (
-    l1 == null ||
-    l2 == null ||
-    fixed_overhead == null ||
-    dynamic_overhead == null
-  ) {
+  const { optimistic } = gasPriceInfo;
+  if (!optimistic) {
     return null;
   }
-  const { gas, to = '0x', value = '0x0', data = '0x' } = transaction;
-  if (gas == null) {
+  const { fixedOverhead, dynamicOverhead } = optimistic;
+  if (gasLimit == null) {
     return null;
   }
 
+  const to = transaction.to ?? '0x';
+  const value = transaction.value ?? '0x';
+  const data = transaction.data ?? '0x';
+
+  const baseFee = optimistic.underlying.eip1559?.baseFee;
+  const eip1559GasPrice =
+    gasPriceObject?.eip1559 || optimistic.underlying.eip1559;
+  const classicGasPrice =
+    gasPriceObject?.classic || optimistic.underlying.classic;
+
   const nonce = await getNonce();
-  const encoded_tx_data = rlpEncode([nonce, l2, gas, to, value, data]);
+  const encoded_tx_data = eip1559GasPrice
+    ? rlpEncode([
+        nonce,
+        eip1559GasPrice.priorityFee,
+        eip1559GasPrice.maxFee,
+        gasLimit,
+        to,
+        valueToHex(value),
+        data,
+      ])
+    : classicGasPrice != null
+    ? rlpEncode([nonce, classicGasPrice, gasLimit, to, valueToHex(value), data])
+    : null;
+  if (encoded_tx_data == null) {
+    return null;
+  }
   const zero_tx_bytes_number = countZeroBytes(encoded_tx_data); // number of zero bytes (!), i.e. '00' substring in encoded tx.
   const non_zero_tx_bytes_number =
     bytesLength(encoded_tx_data) - zero_tx_bytes_number; // len is a number of bytes (!) in encoded tx.
 
-  const tx_data_gas =
-    zero_tx_bytes_number * 4 + non_zero_tx_bytes_number * 16 + 68 * 16;
-  const l1GasEstimation =
-    ((tx_data_gas + fixed_overhead) * dynamic_overhead) / 1000000;
+  const tx_data_gas = zero_tx_bytes_number * 4 + non_zero_tx_bytes_number * 16;
+  const l1GasEstimation = (tx_data_gas + fixedOverhead) * dynamicOverhead;
 
-  const l1_fee_est = Math.round(l1 * l1GasEstimation);
   return {
-    maxFee: l2 * Number(gas) + Math.round(l1_fee_est * 1.25), // Optimism guarantees that there should not be one-time jumps of l1 component of gas estimation more than 25%
-    estimatedFee: l2 * Number(gas) + l1_fee_est,
+    maxFee:
+      (eip1559GasPrice
+        ? Number(eip1559GasPrice.maxFee)
+        : Number(classicGasPrice)) *
+        Number(gasLimit) +
+      Math.round(l1GasEstimation * 1.25), // Optimism guarantees that there should not be one-time jumps of l1 component of gas estimation more than 25%
+    estimatedFee:
+      (eip1559GasPrice
+        ? Math.min(
+            Number(eip1559GasPrice.maxFee),
+            Number(baseFee) + Number(eip1559GasPrice.priorityFee)
+          )
+        : Number(classicGasPrice)) *
+        Number(gasLimit) +
+      Math.round(l1GasEstimation),
   };
 }

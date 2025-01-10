@@ -18,8 +18,8 @@ export function AddressActionDetails({
   actionTransfers,
   singleAsset,
   allowanceQuantityBase,
-  allowanceViewHref,
-  disabled = false,
+  showApplicationLine,
+  singleAssetElementEnd,
 }: {
   recipientAddress?: string;
   addressAction?: Pick<AnyAddressAction, 'label' | 'type'>;
@@ -28,20 +28,27 @@ export function AddressActionDetails({
   wallet: ExternallyOwnedAccount;
   actionTransfers?: ActionTransfers;
   singleAsset?: NonNullable<AddressAction['content']>['single_asset'];
-  allowanceQuantityBase?: string;
-  allowanceViewHref?: string;
-  disabled?: boolean;
+  allowanceQuantityBase: string | null;
+  showApplicationLine: boolean;
+  singleAssetElementEnd: React.ReactNode;
 }) {
+  const showRecipientLine =
+    recipientAddress && addressAction?.type.value === 'send';
+
+  const applicationLineVisible =
+    showApplicationLine && addressAction?.label && !showRecipientLine;
+
   return (
     <>
-      {recipientAddress && addressAction?.type.value === 'send' ? (
+      {showRecipientLine ? (
         <RecipientLine
           recipientAddress={recipientAddress}
           chain={chain}
+          showNetworkIcon={!applicationLineVisible}
           networks={networks}
         />
       ) : null}
-      {addressAction?.label && addressAction?.label.type !== 'to' ? (
+      {applicationLineVisible ? (
         <ApplicationLine
           action={addressAction}
           chain={chain}
@@ -63,8 +70,7 @@ export function AddressActionDetails({
           actionType={addressAction.type.value}
           singleAsset={singleAsset}
           allowanceQuantityBase={allowanceQuantityBase}
-          allowanceViewHref={allowanceViewHref}
-          disabled={disabled}
+          elementEnd={singleAssetElementEnd}
         />
       ) : null}
     </>

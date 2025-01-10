@@ -1,22 +1,38 @@
 import { Store } from 'store-unit';
 import * as browserStorage from 'src/background/webapis/storage';
 
-export class PersistentStore<T> extends Store<T> {
-  private key: string;
-  private isReady: boolean;
-  private readyPromise: Promise<void>;
+type Options<S> = {
+  retrieve: (key: string) => Promise<S | undefined>;
+  save: (key: string, value: S) => Promise<void>;
+};
 
+export class PersistentStore<T> extends Store<T> {
   static async readSavedState<T>(key: string) {
     return browserStorage.get<T>(key);
   }
 
-  constructor(initialState: T, key: string) {
+  protected key: string;
+  protected isReady: boolean;
+  private readyPromise: Promise<void>;
+
+  public options: Options<T>;
+  public defaultOptions: Options<T> = {
+    retrieve: <S>(key: string) => PersistentStore.readSavedState<S>(key),
+    save: (key, value) => browserStorage.set(key, value),
+  };
+
+  constructor(initialState: T, key: string, options: Partial<Options<T>> = {}) {
     super(initialState);
     this.key = key;
+    this.options = { ...this.defaultOptions, ...options };
     this.isReady = false;
     this.readyPromise = this.restore();
     this.on('change', (state) => {
-      browserStorage.set(this.key, state);
+      // only write to disk after restore so that we're not making
+      // a redundant write on each initialization
+      if (this.isReady) {
+        this.options.save(this.key, state);
+      }
     });
   }
 
@@ -27,10 +43,24 @@ export class PersistentStore<T> extends Store<T> {
     return super.getState();
   }
 
+  setState(...args: Parameters<Store<T>['setState']>) {
+    if (!this.isReady) {
+      if (process.env.NODE_ENV === 'development') {
+        // Throw only in dev mode in case some production flow depends on
+        // setting state sooner. Before this refactoring it was possible, so
+        // it shouldn't really break anything
+        throw new Error(
+          'You are trying to write to a PersistentStore before {ready}'
+        );
+      }
+    }
+    return super.setState(...args);
+  }
+
   async restore() {
-    const saved = await browserStorage.get<T>(this.key);
+    const saved = await this.options.retrieve(this.key);
     if (saved) {
-      this.setState(saved);
+      super.setState(saved);
     }
     this.isReady = true;
   }

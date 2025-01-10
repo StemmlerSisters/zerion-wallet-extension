@@ -1,25 +1,17 @@
 import type { Windows } from 'webextension-polyfill';
 import browser from 'webextension-polyfill';
 import { nanoid } from 'nanoid';
+import { getPopupUrl } from 'src/shared/getPopupUrl';
+import { setUrlContext } from 'src/shared/setUrlContext';
+import { getError } from 'src/shared/errors/getError';
 
 type WindowType = 'tab' | 'dialog';
 
-function getPopupRoute(route: string, type: WindowType) {
-  /**
-   * Normally, we'd get the path to popup.html like this:
-   * new URL(`../../ui/popup.html`, import.meta.url)
-   * But parcel is being too smart, and because we're in
-   * the service worker context here, it bundles the entry for sw context as well,
-   * which makes the popup UI crash
-   */
-  const popupUrl = browser.runtime.getManifest().action?.default_popup;
-  if (!popupUrl) {
-    throw new Error('popupUrl not found');
-  }
-  const url = new URL(browser.runtime.getURL(popupUrl));
-  url.searchParams.append('templateType', type);
-  url.hash = route;
-  return url.toString();
+function makePopupRoute(route: string, windowType: WindowType) {
+  const popupUrl = getPopupUrl();
+  setUrlContext(popupUrl.searchParams, { windowType });
+  popupUrl.hash = route;
+  return popupUrl.toString();
 }
 
 const IS_WINDOWS = /windows/i.test(navigator.userAgent);
@@ -33,15 +25,11 @@ export interface WindowProps {
   route: string;
   type: WindowType;
   search?: string;
-  top?: number;
-  left?: number;
   width?: number;
   height?: number | 'max';
 }
 
 export async function createBrowserWindow({
-  top,
-  left,
   width = DEFAULT_WINDOW_SIZE.width,
   height = DEFAULT_WINDOW_SIZE.height,
   route: initialRoute,
@@ -50,7 +38,7 @@ export async function createBrowserWindow({
 }: WindowProps) {
   const id = nanoid();
   const params = new URLSearchParams(search);
-  params.append('windowId', String(id));
+  params.append('windowId', id);
 
   const {
     top: currentWindowTop = 0,
@@ -61,8 +49,8 @@ export async function createBrowserWindow({
   } as Windows.GetInfo);
 
   const position = {
-    top: top ?? currentWindowTop + BROWSER_HEADER,
-    left: left ?? currentWindowLeft + currentWindowWidth - width,
+    top: currentWindowTop + BROWSER_HEADER,
+    left: currentWindowLeft + currentWindowWidth - width,
   };
 
   let heightValue = DEFAULT_WINDOW_SIZE.height;
@@ -75,19 +63,36 @@ export async function createBrowserWindow({
   } else {
     heightValue = height;
   }
-
-  const { id: windowId } = await browser.windows.create({
+  const windowOptions: Partial<Windows.CreateCreateDataType> = {
     focused: true,
-    url: getPopupRoute(`${initialRoute}?${params.toString()}`, type),
+    url: makePopupRoute(`${initialRoute}?${params.toString()}`, type),
     type: type === 'dialog' ? 'popup' : 'normal',
     width,
     height: heightValue,
-    ...position,
-  });
+  };
 
-  if (!windowId) {
+  let window: Windows.Window | undefined;
+  try {
+    window = await browser.windows.create({
+      ...windowOptions,
+      ...position,
+    });
+  } catch (e) {
+    const error = getError(e);
+    if (error.message.includes('Invalid value for bound')) {
+      window = await browser.windows.create({
+        ...windowOptions,
+        top: 0,
+        left: 0,
+      });
+    } else {
+      throw e;
+    }
+  }
+
+  if (!window?.id) {
     throw new Error('Window ID not received from the window API.');
   }
 
-  return { id, windowId };
+  return { id, windowId: window.id };
 }

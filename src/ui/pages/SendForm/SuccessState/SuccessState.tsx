@@ -1,6 +1,6 @@
 import React from 'react';
 import { animated, useTrail } from '@react-spring/web';
-import type { SendFormState, FormPosition } from '@zeriontech/transactions';
+import type { SendFormState, SendFormView } from '@zeriontech/transactions';
 import { PageColumn } from 'src/ui/components/PageColumn';
 import CheckIcon from 'jsx:src/ui/assets/check-circle-thin.svg';
 import { Spacer } from 'src/ui/ui-kit/Spacer';
@@ -15,42 +15,80 @@ import { PageBottom } from 'src/ui/components/PageBottom';
 import { Button } from 'src/ui/ui-kit/Button';
 import { HStack } from 'src/ui/ui-kit/HStack';
 import { TextAnchor } from 'src/ui/ui-kit/TextAnchor';
+import { NavigationTitle } from 'src/ui/components/NavigationTitle';
+import { FEATURE_LOYALTY_FLOW } from 'src/env/config';
+import { useRemoteConfigValue } from 'src/modules/remote-config/useRemoteConfigValue';
 import { TransferVisualization } from '../TransferVisualization';
+
+export function GasbackDecorated({ value }: { value: number }) {
+  return (
+    <HStack
+      gap={8}
+      justifyContent="space-between"
+      alignItems="center"
+      style={{
+        padding: '8px 12px',
+        borderRadius: 12,
+        background:
+          'linear-gradient(90deg, rgba(160, 36, 239, 0.20) 0%, rgba(253, 187, 108, 0.20) 100%)',
+      }}
+    >
+      <UIText kind="small/regular">Gasback</UIText>
+      <UIText
+        kind="small/accent"
+        style={{
+          background: 'linear-gradient(90deg, #6C6CF9 0%, #FF7583 100%)',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+        }}
+      >
+        {new Intl.NumberFormat('en').format(value)}
+      </UIText>
+    </HStack>
+  );
+}
+
+export interface SendFormSnapshot {
+  state: SendFormState;
+  tokenItem: SendFormView['tokenItem'];
+  nftItem: SendFormView['nftItem'];
+}
 
 export function SuccessState({
   paddingTop = 64,
-  sendFormState,
-  tokenItem,
+  sendFormSnapshot,
+  gasbackValue,
   hash,
   onDone,
 }: {
   paddingTop?: number;
-  tokenItem: FormPosition;
-  sendFormState: SendFormState;
+  sendFormSnapshot: SendFormSnapshot;
+  gasbackValue: number | null;
   hash: string | null;
   onDone: () => void;
 }) {
   const { networks } = useNetworks();
-  const { tokenChain, to, tokenValue } = sendFormState;
-  invariant(to && tokenChain, 'Required Form values are missing');
-  const trail = useTrail(3, {
+  const { tokenItem, nftItem, state } = sendFormSnapshot;
+  const { type, tokenChain, nftChain, to, tokenValue } = state;
+  const currentChain = type === 'token' ? tokenChain : nftChain;
+  invariant(to && currentChain, 'Required Form values are missing');
+  const trail = useTrail(4, {
     config: { tension: 400 },
-    from: {
-      opacity: 0,
-      y: 40,
-    },
-    to: {
-      opacity: 1,
-      y: 0,
-    },
+    from: { opacity: 0, y: 40 },
+    to: { opacity: 1, y: 0 },
   });
+  const { data: loyaltyEnabled } = useRemoteConfigValue(
+    'extension_loyalty_enabled'
+  );
+  const FEATURE_GASBACK = loyaltyEnabled && FEATURE_LOYALTY_FLOW === 'on';
   if (!networks) {
     return <ViewLoading />;
   }
-  const chain = createChain(tokenChain);
+  const chain = createChain(currentChain);
   const chainName = networks.getChainName(chain);
   return (
     <PageColumn>
+      <NavigationTitle urlBar="none" title="Send Success" />
       <Spacer height={paddingTop} />
       <animated.div style={trail[0]}>
         <CheckIcon
@@ -66,7 +104,7 @@ export function SuccessState({
       <Spacer height={32} />
       <animated.div style={trail[1]}>
         <UIText kind="headline/h1" style={{ textAlign: 'center' }}>
-          Transfering
+          Transferring
         </UIText>
         <div style={{ display: 'flex', justifyContent: 'center' }}>
           <UIText kind="small/accent" style={{ textAlign: 'center' }}>
@@ -77,7 +115,6 @@ export function SuccessState({
                   size={20}
                   name={chainName}
                   src={networks.getNetworkByName(chain)?.icon_url}
-                  chainId={networks.getChainId(chain)}
                 />{' '}
                 {chainName}
               </HStack>
@@ -86,13 +123,31 @@ export function SuccessState({
         </div>
       </animated.div>
       <Spacer height={32} />
-      <animated.div style={trail[2]}>
-        <TransferVisualization
-          tokenItem={tokenItem}
-          to={to}
-          amount={tokenValue ?? '0'}
-        />
-      </animated.div>
+      {type === 'token' && tokenItem ? (
+        <animated.div style={trail[2]}>
+          <TransferVisualization
+            tokenItem={tokenItem}
+            to={to}
+            amount={tokenValue ?? '0'}
+          />
+        </animated.div>
+      ) : type === 'nft' && nftItem ? (
+        <animated.div style={trail[2]}>
+          <TransferVisualization
+            nftItem={nftItem}
+            to={to}
+            amount={tokenValue ?? '0'}
+          />
+        </animated.div>
+      ) : null}
+      {gasbackValue && FEATURE_GASBACK ? (
+        <animated.div style={trail[3]}>
+          <div style={{ paddingInline: 32 }}>
+            <Spacer height={32} />
+            <GasbackDecorated value={gasbackValue} />
+          </div>
+        </animated.div>
+      ) : null}
       <PageBottom />
       <VStack gap={16} style={{ marginTop: 'auto', textAlign: 'center' }}>
         {hash ? (
@@ -106,7 +161,7 @@ export function SuccessState({
               rel="noopener noreferrer"
               target="_blank"
             >
-              {networks.getExplorerNameById(networks.getChainId(chain))}
+              {networks.getExplorerNameByChainName(chain)}
             </TextAnchor>
             .
           </UIText>

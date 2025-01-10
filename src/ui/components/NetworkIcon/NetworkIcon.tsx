@@ -2,30 +2,22 @@ import React from 'react';
 import { Image } from 'src/ui/ui-kit/MediaFallback';
 import { UIText } from 'src/ui/ui-kit/UIText';
 
-interface BaseProps {
+interface Props {
   src?: string | null;
-  chainId: string | number | null;
   size?: number;
   style?: React.CSSProperties;
   name: string | null;
 }
-type Props = BaseProps & ({ src: string } | { chainId: string | number });
 
 function TextFallback({
   size,
   style,
-  chainId,
   name,
 }: {
   size: number;
   name: string | null;
-  chainId: string | number | null;
   style?: React.CSSProperties;
 }) {
-  const value = chainId
-    ? String(typeof chainId === 'number' ? chainId : parseInt(chainId, 16))
-    : null;
-
   return (
     <UIText
       aria-hidden={true}
@@ -43,13 +35,12 @@ function TextFallback({
         ...style,
       }}
     >
-      {(!value || value.length > 4) && name
-        ? name.charAt(0).toUpperCase()
-        : value || '?'}
+      {name ? name.slice(0, 3).toUpperCase() : '???'}
     </UIText>
   );
 }
-export function NetworkIcon({ src, chainId, name, size = 32, style }: Props) {
+
+export function NetworkIcon({ src, name, size = 32, style }: Props) {
   return src ? (
     <div style={{ width: size, height: size }} title={name || undefined}>
       <Image
@@ -57,11 +48,11 @@ export function NetworkIcon({ src, chainId, name, size = 32, style }: Props) {
         alt=""
         style={{ width: '100%', display: 'block', ...style }}
         renderError={() => (
-          <TextFallback name={name} chainId={chainId} size={size} />
+          <TextFallback name={name} size={size} style={style} />
         )}
       />
     </div>
   ) : (
-    <TextFallback name={name} chainId={chainId} size={size} />
+    <TextFallback name={name} size={size} style={style} />
   );
 }

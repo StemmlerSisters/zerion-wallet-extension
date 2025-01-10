@@ -4,9 +4,10 @@ import {
   isJsonRpcPayload,
   isJsonRpcRequest,
   isJsonRpcResponse,
-} from '@json-rpc-tools/utils';
+} from '@walletconnect/jsonrpc-utils';
 import { BackgroundScriptUpdateHandler } from 'src/shared/core/BackgroundScriptUpdateHandler';
 import { PortMessageChannel } from 'src/shared/PortMessageChannel';
+import { initializeInDappNotifications } from './in-dapp-notifications';
 
 const id = nanoid();
 
@@ -23,7 +24,8 @@ function messageHandler(msg: unknown) {
   } else if (
     msg != null &&
     typeof msg === 'object' &&
-    (msg as { type?: string }).type === 'ethereumEvent'
+    ((msg as { type?: string }).type === 'ethereumEvent' ||
+      (msg as { type?: string }).type === 'walletEvent')
   ) {
     broadcastChannel.postMessage(msg);
   } else {
@@ -74,6 +76,8 @@ broadcastChannel.addEventListener('message', async (event) => {
     console.log('not a JsonRpcRequest'); // eslint-disable-line no-console
   }
 });
+
+initializeInDappNotifications();
 
 // Insert script with id for provider _after_ creating a BroadcastChannel
 const script = document.createElement('script');

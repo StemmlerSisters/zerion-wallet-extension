@@ -1,9 +1,12 @@
 import browser from 'webextension-polyfill';
 import { ethers } from 'ethers';
-import { networksStore } from 'src/modules/networks/networks-store.background';
+import { mainNetworksStore } from 'src/modules/networks/networks-store.background';
 import { configureBackgroundClient } from 'src/modules/defi-sdk/background';
 import { SessionCacheService } from 'src/background/resource/sessionCacheService';
 import { openOnboarding } from 'src/shared/openOnboarding';
+import { userLifecycleStore } from 'src/shared/analytics/shared/UserLifecycle';
+import { UrlContextParam } from 'src/shared/types/UrlContext';
+import { initializeSidepanel } from 'src/shared/sidepanel/initialize.background';
 import { initialize } from './initialize';
 import { PortRegistry } from './messaging/PortRegistry';
 import { createWalletMessageHandler } from './messaging/port-message-handlers/createWalletMessageHandler';
@@ -17,8 +20,11 @@ import type { RuntimePort } from './webapis/RuntimePort';
 import { emitter } from './events';
 import * as userActivity from './user-activity';
 import { ContentScriptManager } from './ContentScriptManager';
+import { TransactionService } from './transactions/TransactionService';
 
 Object.assign(globalThis, { ethers });
+
+initializeSidepanel();
 
 globalThis.addEventListener('install', (_event) => {
   /** Seems to be recommended when clients always expect a service worker */
@@ -33,21 +39,23 @@ globalThis.addEventListener('activate', (_event) => {
 
 if (process.env.NODE_ENV === 'development') {
   // Set different icon for development
-  const icon = new URL(`../images/logo-icon-dev-128.png`, import.meta.url);
+  const icon = new URL('../images/logo-icon-dev-128.png', import.meta.url);
   browser.action.setIcon({
     path: icon.toString(),
   });
 }
 
 configureBackgroundClient();
-networksStore.load();
+mainNetworksStore.load();
 
-function isOnboardingContext(port: RuntimePort) {
+function isOnboardingMode(port: RuntimePort) {
   if (!port.sender?.url) {
     return false;
   }
   const portSenderUrl = new URL(port.sender.url);
-  return portSenderUrl.searchParams.get('context') === 'onboarding';
+  return (
+    portSenderUrl.searchParams.get(UrlContextParam.appMode) === 'onboarding'
+  );
 }
 
 function verifyPort(port: RuntimePort) {
@@ -113,22 +121,17 @@ userActivity.scheduleAlarms();
 // https://developer.chrome.com/docs/extensions/mv3/migrating_to_service_workers/#alarms
 browser.alarms.onAlarm.addListener(userActivity.handleAlarm);
 browser.alarms.onAlarm.addListener(ContentScriptManager.handleAlarm);
+browser.alarms.onAlarm.addListener(TransactionService.handleAlarm);
 
 console.time('bg initialize'); // eslint-disable-line no-console
 initialize().then((values) => {
-  const {
-    account,
-    accountPublicRPC,
-    dnaService,
-    globalPreferences,
-    notificationWindow,
-  } = values;
+  const { account, accountPublicRPC, dnaService, notificationWindow } = values;
   console.timeEnd('bg initialize'); // eslint-disable-line no-console
   notifyContentScriptsAndUIAboutInitialization();
   // const httpConnection = new HttpConnection(() => account.getCurrentWallet());
   const memoryCacheRPC = new MemoryCacheRPC();
 
-  new ContentScriptManager(globalPreferences).removeExpiredRecords().activate();
+  new ContentScriptManager().removeExpiredRecords().activate();
 
   portRegistry.addMessageHandler(
     createWalletMessageHandler(() => account.getCurrentWallet())
@@ -180,10 +183,11 @@ initialize().then((values) => {
   portRegistry.addListener('disconnect', (port: RuntimePort) => {
     if (
       port.name === `${browser.runtime.id}/wallet` &&
-      !isOnboardingContext(port)
+      !isOnboardingMode(port)
     ) {
       // Means extension UI is closed
       account.expirePasswordSession();
+      emitter.emit('uiClosed', { url: port.sender?.url || null });
     }
   });
 
@@ -199,11 +203,7 @@ initialize().then((values) => {
 
 browser.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === 'install') {
-    const popupUrl = browser.runtime.getManifest().action?.default_popup;
-    if (!popupUrl) {
-      throw new Error('popupUrl not found');
-    }
-    const url = new URL(browser.runtime.getURL(popupUrl));
-    openOnboarding(url);
+    userLifecycleStore.handleRuntimeInstalledEvent();
+    openOnboarding();
   }
 });

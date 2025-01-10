@@ -3,8 +3,11 @@ import type {
   ErrorResponse,
   JsonRpcPayload,
   JsonRpcResponse,
-} from '@json-rpc-tools/utils';
-import { isJsonRpcPayload, isJsonRpcRequest } from '@json-rpc-tools/utils';
+} from '@walletconnect/jsonrpc-utils';
+import {
+  isJsonRpcPayload,
+  isJsonRpcRequest,
+} from '@walletconnect/jsonrpc-utils';
 import { formatJsonRpcResultForPort } from 'src/shared/formatJsonRpcResultForPort';
 import { formatJsonRpcWalletError } from 'src/shared/formatJsonRpcWalletError';
 import { isClassProperty } from 'src/shared/core/isClassProperty';
@@ -28,7 +31,8 @@ export function mapRPCMessageToController<T>(
   if (isJsonRpcPayload(msg) && isJsonRpcRequest(msg)) {
     const { method, params, id } = msg;
     // logging
-    // console.log({ method, params, id, port, context });
+    // console.debug({ method, params, id, port, context });
+    // console.table({ initiator: port.sender?.url, method, id });
     if (
       !isClassProperty(controller, method) ||
       typeof controller[method as keyof typeof controller] !== 'function'
@@ -65,7 +69,8 @@ export function mapRPCMessageToController<T>(
       )
       .then((result: JsonRpcResponse) => {
         // logging
-        // console.log('controller result', result);
+        // console.debug('controller result', result);
+        // console.table({ initiator: port.sender?.url, id: result.id });
         port.postMessage(result);
       });
   }

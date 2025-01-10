@@ -2,7 +2,7 @@ import groupBy from 'lodash/groupBy';
 import React from 'react';
 import { useCallback, useMemo, useState } from 'react';
 import { normalizeAddress } from 'src/shared/normalizeAddress';
-import type { BareWallet } from 'src/shared/types/BareWallet';
+import type { MaskedBareWallet } from 'src/shared/types/BareWallet';
 import { PageBottom } from 'src/ui/components/PageBottom';
 import { PageColumn } from 'src/ui/components/PageColumn';
 import { PageStickyFooter } from 'src/ui/components/PageStickyFooter';
@@ -14,25 +14,31 @@ import { PortfolioValue } from 'src/ui/shared/requests/PortfolioValue';
 import { NeutralDecimals } from 'src/ui/ui-kit/NeutralDecimals';
 import { formatCurrencyToParts } from 'src/shared/units/formatCurrencyValue';
 import { NBSP } from 'src/ui/shared/typography';
-import { useAllExistingAddresses } from 'src/ui/shared/requests/useAllExistingAddresses';
+import { useAllExistingMnemonicAddresses } from 'src/ui/shared/requests/useAllExistingAddresses';
 import { Spacer } from 'src/ui/ui-kit/Spacer';
+import { useCurrency } from 'src/modules/currency/useCurrency';
 import { AddressImportMessages } from './AddressImportMessages';
 import { WalletList } from './WalletList';
 
 export function PortfolioValueDetail({ address }: { address: string }) {
+  const { currency } = useCurrency();
+
   return (
     <UIText kind="headline/h2">
       <PortfolioValue
         address={address}
-        render={({ value }) =>
-          value ? (
-            <NeutralDecimals
-              parts={formatCurrencyToParts(value.total_value, 'en', 'usd')}
-            />
-          ) : (
-            <span>{NBSP}</span>
-          )
-        }
+        render={({ data }) => {
+          if (data) {
+            const value = data.data?.totalValue ?? 0;
+            return (
+              <NeutralDecimals
+                parts={formatCurrencyToParts(value, 'en', currency)}
+              />
+            );
+          } else {
+            return <span>{NBSP}</span>;
+          }
+        }}
       />
     </UIText>
   );
@@ -43,18 +49,18 @@ function AddressImportList({
   activeWallets,
   onSubmit,
 }: {
-  wallets: BareWallet[];
+  wallets: MaskedBareWallet[];
   activeWallets: Record<string, { active: boolean }>;
-  onSubmit: (values: BareWallet[]) => void;
+  onSubmit: (values: MaskedBareWallet[]) => void;
 }) {
   const grouped = groupBy(wallets, ({ address }) =>
     activeWallets[normalizeAddress(address)]?.active ? 'active' : 'rest'
   );
   const { active, rest } = grouped as Record<
     'active' | 'rest',
-    BareWallet[] | undefined
+    MaskedBareWallet[] | undefined
   >;
-  const existingAddresses = useAllExistingAddresses();
+  const existingAddresses = useAllExistingMnemonicAddresses();
   const existingAddressesSet = useMemo(
     () => new Set(existingAddresses),
     [existingAddresses]
@@ -133,10 +139,10 @@ export function AddressImportFlow({
   wallets,
   activeWallets,
 }: {
-  wallets: BareWallet[];
+  wallets: MaskedBareWallet[];
   activeWallets: Record<string, { active: boolean }>;
 }) {
-  const [valuesToImport, setValuesToImport] = useState<BareWallet[]>();
+  const [valuesToImport, setValuesToImport] = useState<MaskedBareWallet[]>();
   return valuesToImport ? (
     <AddressImportMessages values={valuesToImport} />
   ) : (

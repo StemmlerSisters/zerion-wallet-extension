@@ -16,7 +16,6 @@ import type { Chain } from 'src/modules/networks/Chain';
 import { VStack } from 'src/ui/ui-kit/VStack';
 import { HStack } from 'src/ui/ui-kit/HStack';
 import { isUnlimitedApproval } from 'src/ui/pages/History/isUnlimitedApproval';
-import { TextLink } from 'src/ui/ui-kit/TextLink';
 import { AssetQuantity } from '../../AssetQuantity';
 import { AssetLink } from '../../AssetLink';
 
@@ -40,16 +39,14 @@ function FungibleAsset({
   actionType,
   fungible,
   quantity,
-  allowanceViewHref,
-  disabled,
+  elementEnd,
 }: {
   address: string;
   chain: Chain;
   actionType: ActionType;
   fungible: Asset;
   quantity: string;
-  allowanceViewHref?: string;
-  disabled: boolean;
+  elementEnd?: React.ReactNode;
 }) {
   const commonQuantity = useMemo(
     () =>
@@ -99,24 +96,7 @@ function FungibleAsset({
                 )}{' '}
                 <AssetLink asset={fungible} address={address} />
               </UIText>
-              {actionType === 'approve' &&
-              Boolean(quantity) &&
-              allowanceViewHref ? (
-                disabled ? (
-                  <UIText kind="small/accent" color="var(--neutral-500)">
-                    Edit
-                  </UIText>
-                ) : (
-                  <UIText
-                    as={TextLink}
-                    kind="small/accent"
-                    color="var(--primary)"
-                    to={allowanceViewHref}
-                  >
-                    Edit
-                  </UIText>
-                )
-              ) : null}
+              {elementEnd}
             </HStack>
           }
           detailText={null}
@@ -126,7 +106,7 @@ function FungibleAsset({
   );
 }
 
-function NFTAsset({ nft }: { nft: NFTAsset }) {
+function NFTAssetComponent({ nft }: { nft: NFTAsset }) {
   const iconUrl = nft.icon_url || nft.collection?.icon_url;
 
   return (
@@ -163,8 +143,7 @@ export function SingleAsset({
   actionType,
   singleAsset,
   allowanceQuantityBase,
-  allowanceViewHref,
-  disabled,
+  elementEnd,
 }: {
   address: string;
   chain: Chain;
@@ -172,9 +151,8 @@ export function SingleAsset({
   singleAsset: NonNullable<
     NonNullable<AddressAction['content']>['single_asset']
   >;
-  allowanceQuantityBase?: string;
-  allowanceViewHref?: string;
-  disabled: boolean;
+  allowanceQuantityBase: string | null;
+  elementEnd?: React.ReactNode;
 }) {
   const fungibleAsset = getFungibleAsset(singleAsset.asset);
   const nftAsset = getNftAsset(singleAsset.asset);
@@ -192,13 +170,12 @@ export function SingleAsset({
         actionType={actionType}
         fungible={fungibleAsset}
         quantity={quantity}
-        allowanceViewHref={allowanceViewHref}
-        disabled={disabled}
+        elementEnd={elementEnd}
       />
     );
   }
   if (nftAsset) {
-    return <NFTAsset nft={nftAsset} />;
+    return <NFTAssetComponent nft={nftAsset} />;
   }
 
   return null;
