@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import SettingsIcon from 'jsx:src/ui/assets/filters.svg';
 import { invariant } from 'src/shared/invariant';
@@ -16,19 +16,93 @@ import { VStack } from 'src/ui/ui-kit/VStack';
 import { UIText } from 'src/ui/ui-kit/UIText';
 import { walletPort } from 'src/ui/shared/channels';
 import { requestChainForOrigin } from 'src/ui/shared/requests/requestChainForOrigin';
-import { noValueDash } from 'src/ui/shared/typography';
 import { NetworkIcon } from 'src/ui/components/NetworkIcon';
 import ArrowDownIcon from 'jsx:src/ui/assets/caret-down-filled.svg';
-import { useNetworks } from 'src/modules/networks/useNetworks';
 import { createChain } from 'src/modules/networks/Chain';
 import { INTERNAL_ORIGIN } from 'src/background/constants';
+import {
+  useMainnetNetwork,
+  useNetworks,
+} from 'src/modules/networks/useNetworks';
+import { usePreferences } from 'src/ui/features/preferences';
+import { capitalize } from 'capitalize-ts';
 import { ConnectedSiteDialog } from '../../ConnectedSites/ConnectedSite';
 import { NetworkSelect } from '../../Networks/NetworkSelect';
 import { isConnectableDapp } from '../../ConnectedSites/shared/isConnectableDapp';
+import { offsetValues } from '../getTabsOffset';
+
+const COMPONENT_HEIGHT = 68;
+
+function NetworksDisclosureButton({
+  value,
+  openDialog,
+}: {
+  value: string;
+  openDialog: () => void;
+}) {
+  const { networks, isLoading } = useNetworks();
+  const { preferences } = usePreferences();
+  const selectedNetwork = networks?.getNetworkByName(createChain(value));
+
+  const { data: mainnetNetwork } = useMainnetNetwork({
+    chain: value,
+    enabled:
+      Boolean(preferences?.testnetMode?.on) && !isLoading && !selectedNetwork,
+  });
+  const chain = createChain(value);
+  const network = selectedNetwork || mainnetNetwork;
+
+  if (isLoading) {
+    return null;
+  }
+
+  return (
+    <Button
+      size={36}
+      kind="neutral"
+      onClick={openDialog}
+      style={{
+        paddingInline: '8px 4px',
+        ['--button-background' as string]: 'var(--white)',
+        ['--button-background-hover' as string]: 'var(--white)',
+        ['--button-text-hover' as string]: 'var(--neutral-800)',
+        ['--parent-content-color' as string]: 'var(--neutral-500)',
+        ['--parent-hovered-content-color' as string]: 'var(--black)',
+      }}
+      className="parent-hover"
+    >
+      <HStack gap={8} alignItems="center">
+        {network ? (
+          <NetworkIcon size={24} src={network.icon_url} name={network.name} />
+        ) : null}
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+          }}
+        >
+          <span
+            style={{
+              maxWidth: 90,
+              overflow: 'hidden',
+              whiteSpace: 'nowrap',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {network?.name || capitalize(String(chain))}
+          </span>
+          <ArrowDownIcon
+            className="content-hover"
+            style={{ width: 20, height: 20 }}
+          />
+        </span>
+      </HStack>
+    </Button>
+  );
+}
 
 export function ConnectionHeader() {
   const { isPaused, globalPreferences } = usePausedData();
-  const { networks } = useNetworks();
   const showPausedHeader = isPaused && globalPreferences;
   const [showConnectionDialog, setShowConnectionDialog] = useState(false);
   const dialogRef = useRef<HTMLDialogElementInterface | null>(null);
@@ -65,12 +139,22 @@ export function ConnectionHeader() {
     onSuccess: () => chainQuery.refetch(),
   });
 
-  const isConnectableSite = activeTabOrigin
-    ? isConnectableDapp(new URL(activeTabOrigin))
+  const isConnectableSite = tabData?.url
+    ? isConnectableDapp(tabData.url)
     : false;
 
+  const isHidden = !isConnectableSite && !showPausedHeader;
+  useEffect(() => {
+    offsetValues.setState({
+      connectionHeaderHeight: isHidden ? 0 : COMPONENT_HEIGHT,
+    });
+  }, [isHidden]);
+
+  if (isHidden) {
+    return null;
+  }
   return (
-    <>
+    <div style={{ backgroundColor: 'var(--background)', padding: 16 }}>
       <BottomSheetDialog
         ref={dialogRef}
         height="fit-content"
@@ -175,68 +259,12 @@ export function ConnectionHeader() {
                         origin: activeTabOrigin,
                       });
                     }}
-                    renderButton={({ openDialog, value }) => {
-                      const chain = createChain(value);
-                      const network =
-                        chain && networks
-                          ? networks.getNetworkByName(chain)
-                          : null;
-
-                      return (
-                        <Button
-                          size={36}
-                          kind="neutral"
-                          onClick={openDialog}
-                          style={{
-                            paddingInline: '8px 4px',
-                            ['--button-background' as string]: 'var(--white)',
-                            ['--button-background-hover' as string]:
-                              'var(--white)',
-                            ['--button-text-hover' as string]:
-                              'var(--neutral-800)',
-                            ['--parent-content-color' as string]:
-                              'var(--neutral-500)',
-                            ['--parent-hovered-content-color' as string]:
-                              'var(--black)',
-                          }}
-                          className="parent-hover"
-                        >
-                          <HStack gap={8} alignItems="center">
-                            {network ? (
-                              <NetworkIcon
-                                size={24}
-                                src={network.icon_url}
-                                name={network.name}
-                                chainId={network.external_id}
-                              />
-                            ) : null}
-                            <span
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                              }}
-                            >
-                              <span
-                                style={{
-                                  maxWidth: 90,
-                                  overflow: 'hidden',
-                                  whiteSpace: 'nowrap',
-                                  textOverflow: 'ellipsis',
-                                }}
-                              >
-                                {chain
-                                  ? networks?.getChainName(chain)
-                                  : noValueDash}
-                              </span>
-                              <ArrowDownIcon
-                                className="content-hover"
-                                style={{ width: 20, height: 20 }}
-                              />
-                            </span>
-                          </HStack>
-                        </Button>
-                      );
-                    }}
+                    renderButton={({ openDialog, value }) => (
+                      <NetworksDisclosureButton
+                        value={value}
+                        openDialog={openDialog}
+                      />
+                    )}
                   />
                 ) : null}
               </HStack>
@@ -274,6 +302,6 @@ export function ConnectionHeader() {
         )}
         <PauseInjectionControl />
       </HStack>
-    </>
+    </div>
   );
 }

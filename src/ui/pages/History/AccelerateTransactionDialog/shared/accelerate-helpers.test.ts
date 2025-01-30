@@ -1,7 +1,12 @@
+import dotenv from 'dotenv';
+dotenv.config();
 import type { AnyAddressAction } from 'src/modules/ethereum/transactions/addressAction';
+import { invariant } from 'src/shared/invariant';
 import { isCancelTx } from './accelerate-helpers';
 
-const testAddress = process.env.TEST_WALLET_ADDRESS as string;
+const testAddress = process.env.TEST_WALLET_ADDRESS;
+
+invariant(testAddress, 'TEST_WALLET_ADDRESS Env var not found');
 
 const cancelTxSample = {
   id: '0xd188a791d2538e6a4dca6377300362fe1e196b00161321ecf5f345e2196739a1',
@@ -36,6 +41,7 @@ const cancelTxSample = {
     chain: 'polygon',
     status: 'pending',
     fee: null,
+    sponsored: false,
   },
   datetime: '2023-12-17T17:24:16.396Z',
   label: {

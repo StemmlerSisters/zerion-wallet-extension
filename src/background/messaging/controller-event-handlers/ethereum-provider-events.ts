@@ -2,7 +2,8 @@ import browser from 'webextension-polyfill';
 import type { Account } from 'src/background/account/Account';
 import { emitter } from 'src/background/events';
 import type { RuntimePort } from 'src/background/webapis/RuntimePort';
-import { payloadId } from '@json-rpc-tools/utils';
+import { payloadId } from '@walletconnect/jsonrpc-utils';
+import { getProviderInjectionChange } from 'src/background/Wallet/GlobalPreferences';
 import { getPortContext } from '../getPortContext';
 
 interface Listener {
@@ -37,7 +38,11 @@ export class EthereumEventsBroadcaster implements Listener {
   private getClientPorts() {
     const ports = this.getActivePorts();
     return ports.filter(
-      (port) => port.name === `${browser.runtime.id}/ethereum`
+      (port) =>
+        port.name === `${browser.runtime.id}/ethereum` ||
+        // "/wallet" is our own UI and we need to notify changes to it
+        // when it's opened as a sidepanel
+        port.name === `${browser.runtime.id}/wallet`
     );
   }
 
@@ -60,7 +65,7 @@ export class EthereumEventsBroadcaster implements Listener {
     );
 
     this.disposers.push(
-      emitter.on('chainChanged', async () => {
+      emitter.on('chainsUpdated', async () => {
         this.getClientPorts().forEach(async (port) => {
           const wallet = this.account.getCurrentWallet();
           const chainId = await wallet.publicEthereumController.eth_chainId({
@@ -89,6 +94,27 @@ export class EthereumEventsBroadcaster implements Listener {
               type: 'ethereumEvent',
               event: 'connect',
             });
+          }
+        });
+      })
+    );
+
+    this.disposers.push(
+      emitter.on('globalPreferencesChange', (state, prevState) => {
+        const { paused } = getProviderInjectionChange(state, prevState);
+        if (!paused.length) {
+          return;
+        }
+        const pausedOriginsSet = new Set(paused);
+
+        this.getClientPorts().forEach((port) => {
+          const portUrl = port.sender?.url;
+          if (!portUrl) {
+            return;
+          }
+          const portOrigin = new URL(portUrl).origin;
+          if (pausedOriginsSet.has(portOrigin)) {
+            port.postMessage({ type: 'walletEvent', event: 'pauseInjection' });
           }
         });
       })

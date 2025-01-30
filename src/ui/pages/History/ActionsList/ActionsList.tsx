@@ -11,6 +11,7 @@ import {
   type AnyAddressAction,
 } from 'src/modules/ethereum/transactions/addressAction';
 import { DelayedRender } from 'src/ui/components/DelayedRender';
+import { usePreferences } from 'src/ui/features/preferences';
 import { ActionItem } from '../ActionItem';
 
 export function ActionsList({
@@ -24,6 +25,7 @@ export function ActionsList({
   isLoading: boolean;
   onLoadMore?(): void;
 }) {
+  const { preferences } = usePreferences();
   const groupedByDate = useMemo(
     () =>
       groupBy(actions, (item) =>
@@ -53,9 +55,14 @@ export function ActionsList({
                 const hash = addressAction.transaction.hash;
                 return {
                   key: isLocalAddressAction(addressAction)
-                    ? addressAction.relatedTransaction || hash
+                    ? `local-${addressAction.relatedTransaction || hash}`
                     : hash,
-                  component: <ActionItem addressAction={addressAction} />,
+                  component: (
+                    <ActionItem
+                      addressAction={addressAction}
+                      testnetMode={Boolean(preferences?.testnetMode?.on)}
+                    />
+                  ),
                 };
               })}
             />

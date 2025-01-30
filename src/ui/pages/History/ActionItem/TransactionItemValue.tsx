@@ -1,7 +1,12 @@
 import React, { useMemo } from 'react';
-import type { NFTAsset, Asset, Direction, ActionTransfer } from 'defi-sdk';
+import type {
+  NFTAsset,
+  Asset,
+  Direction,
+  ActionTransfer,
+  ActionType,
+} from 'defi-sdk';
 import { minus } from 'src/ui/shared/typography';
-import { formatTokenValue } from 'src/shared/units/formatTokenValue';
 import { HStack } from 'src/ui/ui-kit/HStack';
 import type { Chain } from 'src/modules/networks/Chain';
 import { getCommonQuantity } from 'src/modules/networks/asset';
@@ -26,6 +31,7 @@ function getSign(
 }
 
 function HistoryTokenValue({
+  actionType,
   value,
   asset,
   chain,
@@ -33,6 +39,7 @@ function HistoryTokenValue({
   address,
   withLink,
 }: {
+  actionType: ActionType;
   value: number | string;
   asset: Asset;
   chain: Chain;
@@ -40,32 +47,35 @@ function HistoryTokenValue({
   address?: string;
   withLink: boolean;
 }) {
-  const tokenTitle = asset.symbol?.toUpperCase() || asset.name;
   const sign = getSign(value, direction);
   const commonQuantity = useMemo(
     () =>
-      getCommonQuantity({
-        asset,
-        chain,
-        baseQuantity: value,
-      }),
-    [chain, asset, value]
+      value === '0' && actionType === 'revoke'
+        ? null
+        : getCommonQuantity({
+            asset,
+            chain,
+            baseQuantity: value,
+          }),
+    [chain, actionType, asset, value]
   );
-  const formatted = formatTokenValue(value);
 
   return (
     <HStack
       gap={4}
       alignItems="center"
       style={{
-        gridTemplateColumns:
-          'minmax(min-content, max-content) minmax(20px, max-content)',
+        gridTemplateColumns: commonQuantity
+          ? 'minmax(min-content, max-content) minmax(20px, max-content)'
+          : 'minmax(min-content, max-content)',
         overflow: 'hidden',
         whiteSpace: 'nowrap',
       }}
-      title={`${sign}${formatted} ${tokenTitle}`}
+      title={commonQuantity?.toFixed()}
     >
-      <AssetQuantity sign={sign} commonQuantity={commonQuantity} />
+      {commonQuantity ? (
+        <AssetQuantity sign={sign} commonQuantity={commonQuantity} />
+      ) : null}
       {withLink ? (
         <AssetLink asset={asset} address={address} />
       ) : (
@@ -114,12 +124,14 @@ export function HistoryNFTValue({
 }
 
 export function HistoryItemValue({
+  actionType,
   transfers,
   direction,
   chain,
   address,
   withLink,
 }: {
+  actionType: ActionType;
   transfers?: Pick<ActionTransfer, 'asset' | 'quantity'>[];
   direction: Direction;
   chain: Chain;
@@ -154,6 +166,7 @@ export function HistoryItemValue({
     />
   ) : fungibleAsset ? (
     <HistoryTokenValue
+      actionType={actionType}
       address={address}
       asset={fungibleAsset}
       chain={chain}
@@ -167,9 +180,11 @@ export function HistoryItemValue({
 export function TransactionCurrencyValue({
   transfers,
   chain,
+  currency,
 }: {
   transfers?: ActionTransfer[];
   chain: Chain;
+  currency: string;
 }) {
   if (transfers?.length !== 1) {
     return null;
@@ -188,7 +203,7 @@ export function TransactionCurrencyValue({
   const value = formatCurrencyValue(
     commonQuantity.times(transfer.price || 0),
     'en',
-    'usd'
+    currency
   );
   return <>{value}</>;
 }

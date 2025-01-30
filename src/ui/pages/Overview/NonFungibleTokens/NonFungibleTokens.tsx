@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import type { AddressNFT } from 'defi-sdk';
 import { formatCurrencyToParts } from 'src/shared/units/formatCurrencyValue';
 import TickIcon from 'jsx:src/ui/assets/check.svg';
 import { ViewLoading } from 'src/ui/components/ViewLoading/ViewLoading';
@@ -19,7 +20,6 @@ import {
   getNftId,
   useAddressNfts,
 } from 'src/ui/shared/requests/addressNfts/useAddressNfts';
-import type { AddressNFT } from 'src/ui/shared/requests/addressNfts/types';
 import { useNetworks } from 'src/modules/networks/useNetworks';
 import { createChain } from 'src/modules/networks/Chain';
 import { NetworkIcon } from 'src/ui/components/NetworkIcon';
@@ -28,9 +28,14 @@ import { DelayedRender } from 'src/ui/components/DelayedRender';
 import { SurfaceList } from 'src/ui/ui-kit/SurfaceList';
 import { CenteredFillViewportView } from 'src/ui/components/FillView/FillView';
 import { EmptyView } from 'src/ui/components/EmptyView';
-import { NftTabDnaBanner } from 'src/ui/DNA/components/DnaBanners';
+import {
+  ENABLE_DNA_BANNERS,
+  NftTabDnaBanner,
+} from 'src/ui/DNA/components/DnaBanners';
+import { useStore } from '@store-unit/react';
+import { useCurrency } from 'src/modules/currency/useCurrency';
 import { getNftEntityUrl } from '../../NonFungibleToken/getEntityUrl';
-import { GROWN_TAB_MAX_HEIGHT } from '../getTabsOffset';
+import { getGrownTabMaxHeight, offsetValues } from '../getTabsOffset';
 import { NetworkBalance } from '../Positions/NetworkBalance';
 import * as s from './styles.module.css';
 
@@ -43,6 +48,7 @@ function NFTItem({
   showCollection?: boolean;
   someHavePrice?: boolean;
 }) {
+  const { currency } = useCurrency();
   const isPrimary = useMemo(() => {
     return item.metadata.tags?.includes('#primary');
   }, [item]);
@@ -91,7 +97,6 @@ function NFTItem({
                   }}
                 >
                   <NetworkIcon
-                    chainId={network.external_id}
                     size={12}
                     name={network.name}
                     src={network.icon_url}
@@ -129,7 +134,7 @@ function NFTItem({
           {price ? (
             <UIText kind="small/accent">
               <NeutralDecimals
-                parts={formatCurrencyToParts(price, 'en', 'usd')}
+                parts={formatCurrencyToParts(price, 'en', currency)}
               />
             </UIText>
           ) : someHavePrice ? (
@@ -168,10 +173,11 @@ export function NonFungibleTokens({
   filterChain: string | null;
   onChainChange: (value: string | null) => void;
 }) {
+  const { currency } = useCurrency();
   const { ready, params, singleAddressNormalized } = useAddressParams();
   const { value: nftDistribution } = useAddressNFTDistribution({
     ...params,
-    currency: 'usd',
+    currency,
   });
   const { value: nftTotalValue } = useNftsTotalValue(params);
   const { networks } = useNetworks();
@@ -180,7 +186,7 @@ export function NonFungibleTokens({
   const isSupportedByBackend =
     chainValue === NetworkSelectValue.All
       ? true
-      : networks?.isSupportedByBackend(createChain(chainValue));
+      : networks?.supports('nft_positions', createChain(chainValue));
 
   const {
     value: items,
@@ -194,7 +200,7 @@ export function NonFungibleTokens({
         isSupportedByBackend && chainValue !== NetworkSelectValue.All
           ? [chainValue]
           : undefined,
-      currency: 'usd',
+      currency,
       sorted_by: 'floor_price_high',
     },
     {
@@ -203,6 +209,8 @@ export function NonFungibleTokens({
       enabled: isSupportedByBackend,
     }
   );
+
+  const offsetValuesState = useStore(offsetValues);
 
   if (!ready) {
     return null;
@@ -234,12 +242,16 @@ export function NonFungibleTokens({
 
   if (!isSupportedByBackend) {
     return (
-      <CenteredFillViewportView maxHeight={GROWN_TAB_MAX_HEIGHT}>
+      <CenteredFillViewportView
+        maxHeight={getGrownTabMaxHeight(offsetValuesState)}
+      >
         {emptyNetworkBalance}
         <VStack gap={4} style={{ padding: 20, textAlign: 'center' }}>
           <span style={{ fontSize: 20 }}>💔</span>
           <UIText kind="body/regular">
-            NFTs for {chainValue} are not supported yet
+            NFTs for{' '}
+            {networks?.getChainName(createChain(chainValue)) || chainValue} are
+            not supported yet
           </UIText>
         </VStack>
       </CenteredFillViewportView>
@@ -248,7 +260,9 @@ export function NonFungibleTokens({
 
   if (!items) {
     return (
-      <CenteredFillViewportView maxHeight={GROWN_TAB_MAX_HEIGHT}>
+      <CenteredFillViewportView
+        maxHeight={getGrownTabMaxHeight(offsetValuesState)}
+      >
         {emptyNetworkBalance}
         <ViewLoading kind="network" />
       </CenteredFillViewportView>
@@ -257,7 +271,9 @@ export function NonFungibleTokens({
 
   if (!items?.length) {
     return (
-      <CenteredFillViewportView maxHeight={GROWN_TAB_MAX_HEIGHT}>
+      <CenteredFillViewportView
+        maxHeight={getGrownTabMaxHeight(offsetValuesState)}
+      >
         {emptyNetworkBalance}
         <DelayedRender delay={100}>
           {isLoading && isSupportedByBackend ? (
@@ -266,18 +282,25 @@ export function NonFungibleTokens({
             </div>
           ) : (
             <>
-              <NftTabDnaBanner
-                address={singleAddressNormalized}
+              {ENABLE_DNA_BANNERS ? (
+                <NftTabDnaBanner
+                  address={singleAddressNormalized}
+                  style={{
+                    paddingInline: 16,
+                    position: 'absolute',
+                    left: 0,
+                    right: 0,
+                    top: 36,
+                  }}
+                />
+              ) : null}
+              <div
                 style={{
-                  paddingInline: 16,
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  top: 36,
+                  width: '100%',
+                  paddingTop: ENABLE_DNA_BANNERS ? 164 : 0,
                 }}
-              />
-              <div style={{ width: '100%', paddingTop: 164 }}>
-                <EmptyView text="No NFTs yet" />
+              >
+                <EmptyView>No NFTs yet</EmptyView>
               </div>
             </>
           )}
@@ -296,16 +319,18 @@ export function NonFungibleTokens({
           value={
             nftChainValue != null ? (
               <NeutralDecimals
-                parts={formatCurrencyToParts(nftChainValue, 'en', 'usd')}
+                parts={formatCurrencyToParts(nftChainValue, 'en', currency)}
               />
             ) : null
           }
         />
       </div>
-      <NftTabDnaBanner
-        address={singleAddressNormalized}
-        style={{ paddingInline: 16 }}
-      />
+      {ENABLE_DNA_BANNERS ? (
+        <NftTabDnaBanner
+          address={singleAddressNormalized}
+          style={{ paddingInline: 16 }}
+        />
+      ) : null}
 
       <div
         style={{

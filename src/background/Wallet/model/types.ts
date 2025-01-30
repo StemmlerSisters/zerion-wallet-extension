@@ -1,8 +1,8 @@
-import type { ethers } from 'ethers';
 import type { WalletAbility } from 'src/shared/types/Daylight';
 import type { SignerContainer } from './WalletContainer';
 import type { WalletOrigin } from './WalletOrigin';
 import type { AccountContainer } from './AccountContainer';
+import type { EthersV5TransactionResponse } from './ethers-v5-types';
 
 export type WalletContainer = SignerContainer | AccountContainer;
 
@@ -31,11 +31,12 @@ type Address = string;
  */
 interface PublicPreferences {
   /**
-   * DEPRECATED
+   * @deprecated
    * Whether to show DApp Network Switch in Header
    * Defaults to `true`
    */
   showNetworkSwitchShortcut?: boolean;
+  /** @deprecated */
   overviewChain?: string;
   /**
    * Allow to configure nonce before signing transactions
@@ -45,6 +46,19 @@ interface PublicPreferences {
   recentAddresses?: string[];
   mintDnaBannerDismissed?: boolean;
   upgradeDnaBannerDismissed?: boolean;
+  inviteFriendsBannerDismissed?: boolean;
+  backupReminderDismissedTime?: number;
+  /** @deprecated */
+  enableTestnets?: boolean;
+  /**
+   * {testnetMode} has three states:
+   * {null} means completely "off"
+   * { on: boolean } means that UI can enable a keyboard shortcut for quick toggle
+   * { on: true } means we're in testnet mode
+   * { on: false } means we're in prod mode, but user can switch quickly using the shortcut
+   */
+  testnetMode?: null | { on: boolean };
+  enableHoldToSignButton?: boolean | null;
 }
 
 export interface Permission {
@@ -57,7 +71,7 @@ export interface WalletRecordVersion1 {
   version: 1;
   walletManager: WalletManager;
   permissions: Record<Origin, Address[]>;
-  transactions: ethers.providers.TransactionResponse[];
+  transactions: EthersV5TransactionResponse[];
   preferences: PublicPreferences;
 }
 
@@ -65,7 +79,7 @@ export interface WalletRecordVersion2 {
   version: 2;
   walletManager: WalletManager;
   permissions: Record<Origin, Permission>;
-  transactions: ethers.providers.TransactionResponse[];
+  transactions: EthersV5TransactionResponse[];
   preferences: PublicPreferences;
 }
 
@@ -73,7 +87,7 @@ export interface WalletRecordVersion3 {
   version: 3;
   walletManager: WalletManager;
   permissions: Record<Origin, Permission>;
-  transactions: ethers.providers.TransactionResponse[];
+  transactions: EthersV5TransactionResponse[];
   publicPreferences: PublicPreferences;
 }
 

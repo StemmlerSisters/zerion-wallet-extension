@@ -4,7 +4,10 @@ import type { RemoteConfig } from 'src/modules/remote-config';
 import { getRemoteConfigValue } from 'src/modules/remote-config';
 import { removeEmptyValues } from 'src/shared/removeEmptyValues';
 import { equal } from 'src/modules/fast-deep-equal';
+import { difference } from 'src/shared/difference';
 import type { WalletNameFlag } from './model/WalletNameFlag';
+
+const HALF_DAY = 1000 * 60 * 60 * 12;
 
 interface Expiration {
   /**
@@ -22,7 +25,25 @@ interface ProviderInjection {
 export interface State {
   recognizableConnectButtons?: boolean;
   providerInjection?: ProviderInjection;
-  walletNameFlags?: Record<string, WalletNameFlag[]>;
+  autoLockTimeout?: number | 'none';
+  walletNameFlags?: Record<string, WalletNameFlag[] | undefined>;
+}
+
+export function getWalletNameFlagsChange(state: State, prevState: State) {
+  const currentKeys = Object.keys(state.walletNameFlags || {});
+  const prevKeys = Object.keys(prevState.walletNameFlags || {});
+
+  const newlyEnabled = difference(currentKeys, prevKeys);
+  const newlyDisabled = difference(prevKeys, currentKeys);
+  return { enabled: newlyEnabled, disabled: newlyDisabled };
+}
+
+export function getProviderInjectionChange(state: State, prevState: State) {
+  const currentKeys = Object.keys(state.providerInjection || {});
+  const prevKeys = Object.keys(prevState.providerInjection || {});
+  const newlyPaused = difference(currentKeys, prevKeys);
+  const newlyUnpaused = difference(prevKeys, currentKeys);
+  return { paused: newlyPaused, unpaused: newlyUnpaused };
 }
 
 /**
@@ -37,6 +58,7 @@ export class GlobalPreferences extends PersistentStore<State> {
     recognizableConnectButtons: true,
     providerInjection: {},
     walletNameFlags: {},
+    autoLockTimeout: HALF_DAY,
   };
 
   private async fetchDefaultWalletNameFlags() {
@@ -78,7 +100,8 @@ export class GlobalPreferences extends PersistentStore<State> {
 
   setPreferences(preferences: Partial<State>) {
     this.setState((state) => {
-      // Omit values which are the same as the default ones
+      // We don't want to persist default values in storage,
+      // so here we omit values which are the same as the default ones
       const valueWithoutDefaults = {
         ...this.defaults,
         ...state,
@@ -98,8 +121,10 @@ export class GlobalPreferences extends PersistentStore<State> {
       // we need to remove all empty walletNameFlags configs if they don't override default settings
       for (const origin in valueWithoutDefaults.walletNameFlags) {
         if (
-          (!valueWithoutDefaults.walletNameFlags[origin].length &&
-            !(origin in this.defaults.walletNameFlags)) ||
+          // Next two lines are commented out because we changed
+          // the default value. Empty arrays must kept as a user-set "off" value.
+          // (!valueWithoutDefaults.walletNameFlags[origin]?.length &&
+          //   !(origin in this.defaults.walletNameFlags)) ||
           equal(
             valueWithoutDefaults.walletNameFlags[origin],
             this.defaults.walletNameFlags[origin]
@@ -112,3 +137,5 @@ export class GlobalPreferences extends PersistentStore<State> {
     });
   }
 }
+
+export const globalPreferences = new GlobalPreferences({}, 'globalPreferences');

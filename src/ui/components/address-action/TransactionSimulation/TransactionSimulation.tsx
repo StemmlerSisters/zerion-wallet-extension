@@ -1,31 +1,44 @@
 import React from 'react';
 import { VStack } from 'src/ui/ui-kit/VStack';
-import { useQuery } from '@tanstack/react-query';
+import { hashQueryKey, useQuery } from '@tanstack/react-query';
+import { RenderArea } from 'react-area';
+import { Client } from 'defi-sdk';
+import { useDefiSdkClient } from 'src/modules/defi-sdk/useDefiSdkClient';
 import type { IncomingTransactionWithChainId } from 'src/modules/ethereum/types/IncomingTransaction';
 import { useNetworks } from 'src/modules/networks/useNetworks';
 import { describeTransaction } from 'src/modules/ethereum/transactions/describeTransaction';
 import { invariant } from 'src/shared/invariant';
-import { valueToHex } from 'src/shared/units/valueToHex';
-import { incomingTxToIncomingAddressAction } from 'src/modules/ethereum/transactions/addressAction';
-import { interpretTransaction } from 'src/modules/ethereum/transactions/interpret';
+import { incomingTxToIncomingAddressAction } from 'src/modules/ethereum/transactions/addressAction/creators';
 import { walletPort } from 'src/ui/shared/channels';
 import { UIText } from 'src/ui/ui-kit/UIText';
-import { InterpretLoadingState } from '../../InterpretLoadingState';
+import { UnstyledButton } from 'src/ui/ui-kit/UnstyledButton';
+import { normalizeChainId } from 'src/shared/normalizeChainId';
+import { useCurrency } from 'src/modules/currency/useCurrency';
+import type { useInterpretTxBasedOnEligibility } from 'src/ui/shared/requests/uiInterpretTransaction';
 import { AddressActionDetails } from '../AddressActionDetails';
+import { InterpretationState } from '../../InterpretationState';
 
 export function TransactionSimulation({
   vGap = 16,
   address,
   transaction,
+  txInterpretQuery,
+  localAllowanceQuantityBase,
+  showApplicationLine,
+  onOpenAllowanceForm,
 }: {
   vGap?: number;
   address: string;
   transaction: IncomingTransactionWithChainId;
+  txInterpretQuery: ReturnType<typeof useInterpretTxBasedOnEligibility>;
+  localAllowanceQuantityBase?: string;
+  showApplicationLine: boolean;
+  onOpenAllowanceForm?: () => void;
 }) {
   const { networks } = useNetworks();
+  const { currency } = useCurrency();
   invariant(transaction.chainId, 'transaction must have a chainId value');
-
-  const chain = networks?.getChainById(valueToHex(transaction.chainId));
+  const chain = networks?.getChainById(normalizeChainId(transaction.chainId));
 
   // TODO: "wallet" must not be used here,
   // instead, a sender address must be taken from AddressAction
@@ -43,6 +56,7 @@ export function TransactionSimulation({
         })
       : null;
 
+  const client = useDefiSdkClient();
   const { data: localAddressAction } = useQuery({
     queryKey: [
       'incomingTxToIncomingAddressAction',
@@ -50,7 +64,13 @@ export function TransactionSimulation({
       transactionAction,
       networks,
       address,
+      currency,
+      client,
     ],
+    queryKeyHashFn: (queryKey) => {
+      const key = queryKey.map((x) => (x instanceof Client ? x.url : x));
+      return hashQueryKey(key);
+    },
     queryFn: () => {
       return transaction && networks && transactionAction
         ? incomingTxToIncomingAddressAction(
@@ -60,7 +80,9 @@ export function TransactionSimulation({
               timestamp: 0,
             },
             transactionAction,
-            networks
+            networks,
+            currency,
+            client
           )
         : null;
     },
@@ -71,18 +93,7 @@ export function TransactionSimulation({
     useErrorBoundary: true,
   });
 
-  const { data: interpretation, ...interpretQuery } = useQuery({
-    queryKey: ['interpretTransaction', transaction],
-    queryFn: () => {
-      invariant(transaction.from, 'transaction must have a from value');
-      return interpretTransaction(transaction.from, transaction);
-    },
-    // enabled: Boolean(incomingTxWithGasAndFee),
-    keepPreviousData: true,
-    staleTime: 20000,
-    suspense: false,
-    retry: 1,
-  });
+  const interpretation = txInterpretQuery.data;
 
   const interpretAddressAction = interpretation?.action;
   const addressAction = interpretAddressAction || localAddressAction;
@@ -92,7 +103,12 @@ export function TransactionSimulation({
   const recipientAddress = addressAction.label?.display_value.wallet_address;
   const actionTransfers = addressAction.content?.transfers;
   const singleAsset = addressAction.content?.single_asset;
-  const allowanceQuantityBase = addressAction.content?.single_asset?.quantity;
+
+  // TODO: what if network doesn't support simulations (txInterpretQuery is idle or isError),
+  // but this is an approval tx? Can there be a bug?
+  const allowanceQuantityBase = txInterpretQuery.isFetching
+    ? localAllowanceQuantityBase
+    : addressAction.content?.single_asset?.quantity;
 
   return (
     <VStack gap={vGap}>
@@ -104,16 +120,27 @@ export function TransactionSimulation({
         wallet={wallet}
         actionTransfers={actionTransfers}
         singleAsset={singleAsset}
-        allowanceQuantityBase={allowanceQuantityBase}
-        allowanceViewHref={undefined}
+        allowanceQuantityBase={allowanceQuantityBase || null}
+        showApplicationLine={showApplicationLine}
+        singleAssetElementEnd={
+          allowanceQuantityBase && onOpenAllowanceForm ? (
+            <UIText kind="small/accent" color="var(--primary)">
+              <UnstyledButton
+                type="button"
+                className="hover:underline"
+                onClick={onOpenAllowanceForm}
+              >
+                Edit
+              </UnstyledButton>
+            </UIText>
+          ) : null
+        }
       />
-      {interpretQuery.isLoading ? (
-        <InterpretLoadingState />
-      ) : interpretQuery.isError ? (
-        <UIText kind="small/regular" color="var(--notice-600)">
-          Unable to analyze the details of the transaction
-        </UIText>
-      ) : null}
+      <InterpretationState
+        interpretation={interpretation}
+        interpretQuery={txInterpretQuery}
+      />
+      <RenderArea name="transaction-warning-section" />
     </VStack>
   );
 }

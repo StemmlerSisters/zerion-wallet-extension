@@ -1,9 +1,9 @@
 import React from 'react';
+import type { NetworkFeeConfiguration } from '@zeriontech/transactions';
 import type { IncomingTransaction } from 'src/modules/ethereum/types/IncomingTransaction';
 import type { Chain } from 'src/modules/networks/Chain';
 import { useNetworks } from 'src/modules/networks/useNetworks';
 import { useGasPrices } from 'src/ui/shared/requests/useGasPrices';
-import type { NetworkFeeConfiguration } from '../NetworkFee/types';
 import { useTransactionFee } from '../TransactionConfiguration/useTransactionFee';
 import { TransactionWarning } from './TransactionWarning';
 
@@ -18,7 +18,9 @@ function useInsufficientFundsWarning({
   chain: Chain;
   networkFeeConfiguration: NetworkFeeConfiguration;
 }) {
-  const { data: chainGasPrices = null } = useGasPrices(chain);
+  const { data: chainGasPrices = null } = useGasPrices(chain, {
+    suspense: true,
+  });
   const transactionFee = useTransactionFee({
     address,
     transaction,
@@ -59,7 +61,7 @@ export function InsufficientFundsWarning({
     <TransactionWarning
       title="Insufficient balance"
       message={`You don't have enough ${
-        networks?.getNetworkByName(chain)?.native_asset?.symbol.toUpperCase() ||
+        networks?.getNetworkByName(chain)?.native_asset?.symbol ||
         'native token'
       } to cover network fees`}
     />

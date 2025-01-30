@@ -11,7 +11,7 @@ import { useRenderDelay } from 'src/ui/components/DelayedRender/DelayedRender';
 import { invariant } from 'src/shared/invariant';
 import { LedgerIframe } from 'src/ui/hardware-wallet/LedgerIframe';
 import { isRpcRequest } from 'src/shared/custom-rpc';
-import { useAllExistingAddresses } from 'src/ui/shared/requests/useAllExistingAddresses';
+import { useAllSignerOrHwAddresses } from 'src/ui/shared/requests/useAllExistingAddresses';
 import { NavigationTitle } from 'src/ui/components/NavigationTitle';
 import {
   useBackgroundKind,
@@ -21,6 +21,7 @@ import { NavigationBackButton } from 'src/ui/components/NavigationBackButton';
 import { PageColumn } from 'src/ui/components/PageColumn';
 import FullTextLogo from 'jsx:src/ui/assets/zerion-full-logo.svg';
 import { PrivacyFooter } from 'src/ui/components/PrivacyFooter';
+import { useCurrency } from 'src/modules/currency/useCurrency';
 import { isAllowedMessage } from './shared/isAllowedMessage';
 import { ImportSuccess } from './ImportSuccess';
 import { getWalletInfo } from './shared/getWalletInfo';
@@ -92,7 +93,7 @@ export function HardwareWalletConnectionStart({
   const [searchParams] = useSearchParams();
 
   const navigate = useNavigate();
-  const existingAddresses = useAllExistingAddresses();
+  const existingAddresses = useAllSignerOrHwAddresses();
 
   const { mutate: finalize } = useMutation({
     mutationFn: async (params: LedgerAccountImport) => {
@@ -114,6 +115,7 @@ export function HardwareWalletConnectionStart({
 
   const requestId = useId();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const { currency } = useCurrency();
 
   useEffect(() => {
     async function handler(event: MessageEvent) {
@@ -136,7 +138,8 @@ export function HardwareWalletConnectionStart({
           }
         } else if (method === 'wallet-info') {
           const result = await getWalletInfo(
-            (params as { address: string }).address
+            (params as { address: string }).address,
+            currency
           );
           if (iframeRef.current && iframeRef.current.contentWindow) {
             iframeRef.current.contentWindow.postMessage({ id, result }, '*');
@@ -146,7 +149,7 @@ export function HardwareWalletConnectionStart({
     }
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [finalize, onImport, navigate, requestId, searchParams]);
+  }, [finalize, onImport, navigate, requestId, searchParams, currency]);
   return (
     <LedgerIframe
       ref={iframeRef}

@@ -9,6 +9,7 @@ import {
   Navigate,
 } from 'react-router-dom';
 import dayjs from 'dayjs';
+import { DefiSdkClientProvider as DefiSdkClientContextProvider } from 'defi-sdk';
 import * as styles from 'src/ui/style/global.module.css';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { GetStarted } from 'src/ui/pages/GetStarted';
@@ -21,14 +22,15 @@ import { SignMessage } from 'src/ui/pages/SignMessage';
 import { SignTypedData } from 'src/ui/pages/SignTypedData';
 import { useStore } from '@store-unit/react';
 import { runtimeStore } from 'src/shared/core/runtime-store';
+import { useDefiSdkClient } from 'src/modules/defi-sdk/useDefiSdkClient';
 import { Login } from '../pages/Login';
 import { ErrorBoundary } from '../components/ErrorBoundary';
-import { accountPublicRPCPort, walletPort } from '../shared/channels';
-import { CreateAccount } from '../pages/CreateAccount';
 import {
-  isFullScreenMode,
-  pageTemplateType,
-} from '../shared/getPageTemplateName';
+  accountPublicRPCPort,
+  walletPort,
+  windowPort,
+} from '../shared/channels';
+import { CreateAccount } from '../pages/CreateAccount';
 import { URLBar } from '../components/URLBar';
 import { SwitchEthereumChain } from '../pages/SwitchEthereumChain';
 import { DesignTheme } from '../components/DesignTheme';
@@ -37,7 +39,6 @@ import { ViewError } from '../components/ViewError';
 import { ViewArea } from '../components/ViewArea';
 import { Settings } from '../pages/Settings';
 import { Networks } from '../pages/Networks';
-import { BackupWallet } from '../pages/BackupWallet';
 import { ManageWallets } from '../pages/ManageWallets';
 import { WalletSelect } from '../pages/WalletSelect';
 import { NotFoundPage } from '../components/NotFoundPage';
@@ -58,9 +59,9 @@ import { initialize as initializeApperance } from '../features/appearance';
 import { HandshakeFailure } from '../components/HandshakeFailure';
 import { useScreenViewChange } from '../shared/useScreenViewChange';
 import { NonFungibleToken } from '../pages/NonFungibleToken';
-import { Onboarding } from '../Onboarding';
 import { AddEthereumChain } from '../pages/AddEthereumChain';
 import { SignInWithEthereum } from '../pages/SignInWithEthereum';
+import { TestnetModeGuard } from '../pages/TestnetModeGuard';
 import { useBodyStyle } from '../components/Background/Background';
 import { PhishingWarningPage } from '../components/PhishingDefence/PhishingWarningPage';
 import { HardwareWalletConnection } from '../pages/HardwareWalletConnection';
@@ -69,9 +70,25 @@ import { SendForm } from '../pages/SendForm';
 import { SwapForm } from '../pages/SwapForm';
 import { MintDnaFlow } from '../DNA/pages/MintDnaFlow';
 import { UpgradeDnaFlow } from '../DNA/pages/UpgradeDnaFlow';
+import { ChooseGlobalProviderGuard } from '../pages/RequestAccounts/ChooseGlobalProvider/ChooseGlobalProvider';
+import { usePreferences } from '../features/preferences';
+import { openUrl } from '../shared/openUrl';
+import { TestModeDecoration } from '../features/testnet-mode/TestModeDecoration';
+import { Onboarding } from '../features/onboarding';
+import { RevealPrivateKey } from '../pages/RevealPrivateKey';
+import { urlContext } from '../../shared/UrlContext';
+import { BackupPage } from '../pages/Backup/Backup';
+import { ProgrammaticNavigationHelper } from '../shared/routing/ProgrammaticNavigationHelper';
+import { Invite } from '../features/referral-program';
+import { XpDrop } from '../features/xp-drop';
 import { RouteRestoration, registerPersistentRoute } from './RouteRestoration';
 
 const isProd = process.env.NODE_ENV === 'production';
+
+function DefiSdkClientProvider({ children }: React.PropsWithChildren) {
+  const client = useDefiSdkClient();
+  return <DefiSdkClientContextProvider client={client} children={children} />;
+}
 
 const useAuthState = () => {
   const { data, isFetching } = useQuery({
@@ -93,42 +110,27 @@ const useAuthState = () => {
     refetchOnWindowFocus: false,
   });
   const { isAuthenticated, existingUser, wallet } = data || {};
-  // const { data: isAuthenticated, ...isAuthenticatedQuery } = useQuery(
-  //   'isAuthenticated',
-  //   () => accountPublicRPCPort.request('isAuthenticated'),
-  //   { useErrorBoundary: true, retry: false }
-  // );
-  // const { data: existingUser, ...getExistingUserQuery } = useQuery(
-  //   'getExistingUser',
-  //   () => accountPublicRPCPort.request('getExistingUser'),
-  //   { useErrorBoundary: true, retry: false }
-  // );
-  // const { data: wallet, ...currentWalletQuery } = useQuery(
-  //   'wallet/getCurrentWallet',
-  //   () => walletPort.request('getCurrentWallet'),
-  //   { useErrorBoundary: true, retry: false }
-  // );
-  // const isLoading =
-  //   isAuthenticatedQuery.isFetching ||
-  //   getExistingUserQuery.isFetching ||
-  //   currentWalletQuery.isLoading;
   return {
-    isAuthenticated: Boolean(isAuthenticated && wallet),
+    isAuthenticated,
     existingUser,
+    hasWallet: Boolean(wallet),
     isLoading: isFetching,
   };
 };
 
 function SomeKindOfResolver({
   noUser,
+  noWallet,
   notAuthenticated,
   authenticated,
 }: {
   noUser: JSX.Element;
+  noWallet: JSX.Element;
   notAuthenticated: JSX.Element;
   authenticated: JSX.Element;
 }) {
-  const { isLoading, isAuthenticated, existingUser } = useAuthState();
+  const { isLoading, isAuthenticated, existingUser, hasWallet } =
+    useAuthState();
   if (isLoading) {
     return null;
   }
@@ -137,6 +139,9 @@ function SomeKindOfResolver({
   }
   if (!isAuthenticated) {
     return notAuthenticated;
+  }
+  if (!hasWallet) {
+    return noWallet;
   }
   return authenticated;
 }
@@ -165,24 +170,40 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   return children;
 }
 
-function FullScreenViews() {
+function PageLayoutViews() {
+  // TODO: Should these be a part of <Views />?
   return (
     <Routes>
       <Route path="/mint-dna/*" element={<MintDnaFlow />} />
       <Route path="/upgrade-dna/*" element={<UpgradeDnaFlow />} />
+
+      <Route
+        path="/backup/*"
+        element={
+          <RequireAuth>
+            <BackupPage />
+          </RequireAuth>
+        }
+      />
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 }
 
+function MaybeTestModeDecoration() {
+  const { preferences } = usePreferences();
+  return preferences?.testnetMode ? <TestModeDecoration /> : null;
+}
+
 function Views({ initialRoute }: { initialRoute?: string }) {
   useScreenViewChange();
+
+  const isPopup = urlContext.windowType === 'popup';
   return (
     <RouteResolver>
       <ViewArea>
         <URLBar />
-        {pageTemplateType === 'popup' ? (
-          <RouteRestoration initialRoute={initialRoute} />
-        ) : null}
+        {isPopup ? <RouteRestoration initialRoute={initialRoute} /> : null}
         <Routes>
           {initialRoute ? (
             <Route path="/" element={<Navigate to={initialRoute} />} />
@@ -192,6 +213,7 @@ function Views({ initialRoute }: { initialRoute?: string }) {
             element={
               <SomeKindOfResolver
                 noUser={<Navigate to="/intro" replace={true} />}
+                noWallet={<Navigate to="/get-started?intro" replace={true} />}
                 notAuthenticated={<Navigate to="/login" replace={true} />}
                 authenticated={<Navigate to="/overview" replace={true} />}
               />
@@ -249,19 +271,21 @@ function Views({ initialRoute }: { initialRoute?: string }) {
             }
           />
           <Route
-            path="/backup-wallet/*"
+            path="/reveal-private-key/*"
             element={
               <RequireAuth>
-                <BackupWallet />
+                <RevealPrivateKey />
               </RequireAuth>
             }
           />
           <Route
             path="/requestAccounts"
             element={
-              <RequireAuth>
-                <RequestAccounts />
-              </RequireAuth>
+              <ChooseGlobalProviderGuard>
+                <RequireAuth>
+                  <RequestAccounts />
+                </RequireAuth>
+              </ChooseGlobalProviderGuard>
             }
           />
           <Route
@@ -272,6 +296,7 @@ function Views({ initialRoute }: { initialRoute?: string }) {
               </RequireAuth>
             }
           />
+          <Route path="/testnetModeGuard" element={<TestnetModeGuard />} />
           <Route
             path="/siwe/*"
             element={
@@ -296,7 +321,6 @@ function Views({ initialRoute }: { initialRoute?: string }) {
               </RequireAuth>
             }
           />
-          {/* TODO: Should this page be removed? */}
           <Route
             path="/switchEthereumChain"
             element={
@@ -363,6 +387,22 @@ function Views({ initialRoute }: { initialRoute?: string }) {
             }
           />
           <Route
+            path="/invite/*"
+            element={
+              <RequireAuth>
+                <Invite />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/xp-drop/*"
+            element={
+              <RequireAuth>
+                <XpDrop />
+              </RequireAuth>
+            }
+          />
+          <Route
             path="/not-implemented"
             element={
               <FillView>
@@ -388,31 +428,72 @@ dayjs.extend(relativeTime);
 registerPersistentRoute('/send-form');
 registerPersistentRoute('/swap-form');
 
+function GlobalKeyboardShortcuts() {
+  const isDialog = urlContext.windowType === 'dialog';
+  return (
+    <>
+      {isDialog ? (
+        <KeyboardShortcut
+          combination="esc"
+          onKeyDown={() => {
+            const searchParams = new URLSearchParams(window.location.hash);
+            const windowId = searchParams.get('windowId');
+            if (windowId) {
+              windowPort.reject(windowId);
+            }
+          }}
+        />
+      ) : null}
+
+      <KeyboardShortcut
+        combination="ctrl+alt+0"
+        onKeyDown={() => {
+          // Helper for development and debugging :)
+          const url = new URL(window.location.href);
+          openUrl(url, { windowType: 'tab' });
+        }}
+      />
+    </>
+  );
+}
+
 export interface AppProps {
-  mode: 'onboarding' | 'wallet';
   initialView?: 'handshakeFailure';
   inspect?: { message: string };
 }
 
-export function App({ initialView, mode, inspect }: AppProps) {
+export function App({ initialView, inspect }: AppProps) {
+  const isOnboardingMode = urlContext.appMode === 'onboarding';
+  const isPageLayout = urlContext.windowLayout === 'page';
+
   const bodyClassList = useMemo(() => {
     const result = [];
-    if (pageTemplateType === 'dialog') {
+
+    const isDialog = urlContext.windowType === 'dialog';
+    const isTab = urlContext.windowType === 'tab';
+    const isSidepanel = urlContext.windowType === 'sidepanel';
+
+    if (isDialog) {
       result.push(styles.isDialog);
-    } else if (pageTemplateType === 'tab') {
+    } else if (isTab) {
       result.push(styles.isTab);
+    } else if (isSidepanel) {
+      result.push(styles.isSidepanel);
     }
-    if (mode === 'onboarding' || isFullScreenMode) {
-      result.push(styles.fullScreen);
+    if (isOnboardingMode || isPageLayout) {
+      result.push(styles.pageLayout);
     }
     return result;
-  }, [mode]);
+  }, [isOnboardingMode, isPageLayout]);
 
   const { connected } = useStore(runtimeStore);
 
   useBodyStyle(
     useMemo(() => ({ opacity: connected ? '' : '0.6' }), [connected])
   );
+
+  const isOnboardingView =
+    isOnboardingMode && initialView !== 'handshakeFailure';
 
   return (
     <AreaProvider>
@@ -423,6 +504,7 @@ export function App({ initialView, mode, inspect }: AppProps) {
             <ErrorBoundary renderError={(error) => <ViewError error={error} />}>
               <InactivityDetector />
               <SessionResetHandler />
+              <ProgrammaticNavigationHelper />
               <ThemeDecoration />
               {inspect && !isProd ? (
                 <UIText
@@ -435,30 +517,27 @@ export function App({ initialView, mode, inspect }: AppProps) {
                   {inspect.message}
                 </UIText>
               ) : null}
-              <KeyboardShortcut
-                combination="ctrl+alt+0"
-                onKeyDown={() => {
-                  // Helper for development and debugging :)
-                  const url = new URL(window.location.href);
-                  url.searchParams.set('templateType', 'tab');
-                  window.open(url, '_blank');
-                }}
-              />
+              <GlobalKeyboardShortcuts />
               <VersionUpgrade>
+                {!isOnboardingView && !isPageLayout ? (
+                  // Render above <ViewSuspense /> so that it doesn't flicker
+                  <MaybeTestModeDecoration />
+                ) : null}
                 <ViewSuspense logDelays={true}>
-                  {mode === 'onboarding' &&
-                  initialView !== 'handshakeFailure' ? (
+                  {isOnboardingView ? (
                     <Onboarding />
-                  ) : isFullScreenMode ? (
-                    <FullScreenViews />
+                  ) : isPageLayout ? (
+                    <PageLayoutViews />
                   ) : (
-                    <Views
-                      initialRoute={
-                        initialView === 'handshakeFailure'
-                          ? '/handshake-failure'
-                          : undefined
-                      }
-                    />
+                    <DefiSdkClientProvider>
+                      <Views
+                        initialRoute={
+                          initialView === 'handshakeFailure'
+                            ? '/handshake-failure'
+                            : undefined
+                        }
+                      />
+                    </DefiSdkClientProvider>
                   )}
                 </ViewSuspense>
               </VersionUpgrade>

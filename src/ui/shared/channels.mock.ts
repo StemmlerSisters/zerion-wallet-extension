@@ -1,6 +1,9 @@
 import { TestPrivateKeyWalletContainer } from 'src/background/Wallet/model/WalletContainer';
 import { WalletOrigin } from 'src/background/Wallet/model/WalletOrigin';
-import { networksStore } from 'src/modules/networks/networks-store.client.mock';
+import {
+  ETHEREUM_CHAIN_SOURCES,
+  networksStore,
+} from 'src/modules/networks/networks-store.client.mock';
 import { normalizeAddress } from 'src/shared/normalizeAddress';
 import type { BareWallet } from 'src/shared/types/BareWallet';
 import type { GlobalPreferences } from 'src/shared/types/GlobalPreferences';
@@ -82,7 +85,7 @@ const mockRecord: WalletRecord = {
 
 class WalletPortMock {
   state = {
-    chainId: '0x89',
+    chainId: '0x89' as string | null,
   };
 
   async setPreference({
@@ -136,8 +139,11 @@ class WalletPortMock {
         new Chain(args[0].chain as string)
       );
       return;
-    } else if (method === 'getEthereumChainSources') {
-      return networksStore.getState().networks?.ethereumChainSources;
+    } else if (method === 'getOtherNetworkData') {
+      return {
+        ethereumChainConfigs: ETHEREUM_CHAIN_SOURCES,
+        visitedChains: null,
+      };
     } else if (method === 'getGlobalPreferences') {
       return mockedGlobalPreferences;
     } else if (method === 'getPreferences') {
@@ -146,6 +152,9 @@ class WalletPortMock {
       this.setPreference({
         preferences: args[0] as Partial<WalletRecord['publicPreferences']>,
       });
+    } else if (method === 'getWalletGroupByAddress') {
+      // TODO: implement actual search here
+      return mockRecord.walletManager.groups[0];
     } else {
       throw new Error(`Mock method not implemented: ${method}`);
     }

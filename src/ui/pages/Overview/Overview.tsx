@@ -1,6 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Route, Routes, useLocation } from 'react-router-dom';
-import { useAddressPortfolio } from 'defi-sdk';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
 import { RenderArea } from 'react-area';
 import { UIText } from 'src/ui/ui-kit/UIText';
 import { PageColumn } from 'src/ui/components/PageColumn';
@@ -11,6 +10,7 @@ import {
 } from 'src/shared/units/formatCurrencyValue';
 import { formatPercent } from 'src/shared/units/formatPercent/formatPercent';
 import ArrowDownIcon from 'jsx:src/ui/assets/caret-down-filled.svg';
+import ReadonlyIcon from 'jsx:src/ui/assets/visible.svg';
 import { HStack } from 'src/ui/ui-kit/HStack';
 import { useAddressParams } from 'src/ui/shared/user-address/useAddressParams';
 import { usePendingTransactions } from 'src/ui/transactions/usePendingTransactions';
@@ -22,7 +22,7 @@ import {
   SegmentedControlLink,
 } from 'src/ui/ui-kit/SegmentedControl';
 import { PageBottom } from 'src/ui/components/PageBottom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { walletPort } from 'src/ui/shared/channels';
 import { NBSP } from 'src/ui/shared/typography';
 import { WalletDisplayName } from 'src/ui/components/WalletDisplayName';
@@ -30,20 +30,44 @@ import { PageFullBleedColumn } from 'src/ui/components/PageFullBleedColumn';
 import { CopyButton } from 'src/ui/components/CopyButton';
 import { ViewLoading } from 'src/ui/components/ViewLoading';
 import { VStack } from 'src/ui/ui-kit/VStack';
-import {
-  DelayedRender,
-  useRenderDelay,
-} from 'src/ui/components/DelayedRender/DelayedRender';
+import { DelayedRender } from 'src/ui/components/DelayedRender/DelayedRender';
 import { useBodyStyle } from 'src/ui/components/Background/Background';
 import { useProfileName } from 'src/ui/shared/useProfileName';
-import { CenteredFillViewportView } from 'src/ui/components/FillView/FillView';
+import {
+  CenteredFillViewportView,
+  FillView,
+} from 'src/ui/components/FillView/FillView';
 import { NavigationTitle } from 'src/ui/components/NavigationTitle';
 import { getActiveTabOrigin } from 'src/ui/shared/requests/getActiveTabOrigin';
 import { useIsConnectedToActiveTab } from 'src/ui/shared/requests/useIsConnectedToActiveTab';
 import { requestChainForOrigin } from 'src/ui/shared/requests/requestChainForOrigin';
-import { OverviewDnaBanners } from 'src/ui/DNA/components/DnaBanners';
 import { updateAddressDnaInfo } from 'src/modules/dna-service/dna.client';
 import { WalletSourceIcon } from 'src/ui/components/WalletSourceIcon';
+import RewardsIcon from 'jsx:src/ui/assets/rewards.svg';
+import { useStore } from '@store-unit/react';
+import { TextLink } from 'src/ui/ui-kit/TextLink';
+import { getWalletGroupByAddress } from 'src/ui/shared/requests/getWalletGroupByAddress';
+import { isReadonlyContainer } from 'src/shared/types/validators';
+import { useCurrency } from 'src/modules/currency/useCurrency';
+import { EmptyView2 } from 'src/ui/components/EmptyView';
+import {
+  useMainnetNetwork,
+  useNetworks,
+} from 'src/modules/networks/useNetworks';
+import { createChain } from 'src/modules/networks/Chain';
+import { usePreferences } from 'src/ui/features/preferences';
+import { UnstyledButton } from 'src/ui/ui-kit/UnstyledButton';
+import { useEvent } from 'src/ui/shared/useEvent';
+import { useWalletPortfolio } from 'src/modules/zerion-api/hooks/useWalletPortfolio';
+import { useHttpClientSource } from 'src/modules/zerion-api/hooks/useHttpClientSource';
+import { SidepanelOptionsButton } from 'src/shared/sidepanel/SidepanelOptionsButton';
+import { XpDropBanner } from 'src/ui/features/xp-drop/components/XpDropBanner';
+import { UnstyledAnchor } from 'src/ui/ui-kit/UnstyledAnchor';
+import { useWalletParams } from 'src/ui/shared/requests/useWalletParams';
+import { FEATURE_LOYALTY_FLOW } from 'src/env/config';
+import { useRemoteConfigValue } from 'src/modules/remote-config/useRemoteConfigValue';
+import type { ExternallyOwnedAccount } from 'src/shared/types/ExternallyOwnedAccount';
+import { emitter } from 'src/ui/shared/events';
 import { HistoryList } from '../History/History';
 import { SettingsLinkIcon } from '../Settings/SettingsLinkIcon';
 import { WalletAvatar } from '../../components/WalletAvatar';
@@ -53,14 +77,17 @@ import { NonFungibleTokens } from './NonFungibleTokens';
 import { Positions } from './Positions';
 import { ActionButtonsRow } from './ActionButtonsRow';
 import {
-  MIN_TAB_CONTENT_HEIGHT,
   TAB_SELECTOR_HEIGHT,
-  TAB_STICKY_OFFSET,
+  getStickyOffset,
   TABS_OFFSET_METER_ID,
   TAB_TOP_PADDING,
-  getTabsOffset,
+  getCurrentTabsOffset,
+  offsetValues,
+  getMinTabContentHeight,
 } from './getTabsOffset';
 import { ConnectionHeader } from './ConnectionHeader';
+import { BackupReminder } from './BackupReminder';
+import { Banners } from './Banners';
 
 interface ChangeInfo {
   isPositive: boolean;
@@ -97,6 +124,52 @@ function PendingTransactionsIndicator() {
   }
 }
 
+/**
+ * Product requirement:
+ * if we're in default mode (not testnet), but the current dapp chain
+ * is a testnet, we want to hide positions and history to supposedly avoid
+ * confusion for the user
+ */
+function TestnetworkGuard({
+  dappChain: dappChainStr,
+  renderGuard,
+  children,
+}: React.PropsWithChildren<{
+  dappChain: string | null;
+  renderGuard: ({
+    testnetModeEnabled,
+  }: {
+    testnetModeEnabled: boolean;
+  }) => React.ReactNode;
+}>) {
+  const { preferences } = usePreferences();
+  const dappChain = dappChainStr ? createChain(dappChainStr) : null;
+  const { networks, isLoading } = useNetworks(
+    dappChainStr ? [dappChainStr] : undefined
+  );
+  const currentNetwork = dappChain
+    ? networks?.getNetworkByName(dappChain)
+    : null;
+  const { data: mainnetNetwork } = useMainnetNetwork({
+    chain: dappChainStr || null,
+    enabled:
+      Boolean(preferences?.testnetMode?.on) &&
+      !isLoading &&
+      !currentNetwork &&
+      Boolean(dappChainStr),
+  });
+  const network = currentNetwork || mainnetNetwork;
+  const testnetModeEnabled = Boolean(preferences?.testnetMode?.on);
+  if (
+    dappChainStr &&
+    network &&
+    testnetModeEnabled !== Boolean(network.is_testnet)
+  ) {
+    return renderGuard({ testnetModeEnabled });
+  }
+  return children;
+}
+
 function PercentChange({
   value,
   locale,
@@ -118,17 +191,12 @@ function CurrentAccountControls() {
     queryKey: ['wallet/uiGetCurrentWallet'],
     queryFn: () => walletPort.request('uiGetCurrentWallet'),
   });
-  const visible = useRenderDelay(16);
   if (!ready || !wallet) {
     return null;
   }
   const addressToCopy = wallet.address || singleAddress;
   return (
-    <HStack
-      gap={0}
-      alignItems="center"
-      style={{ visibility: visible ? 'visible' : 'hidden' }}
-    >
+    <HStack gap={0} alignItems="center">
       <Button
         kind="text-primary"
         size={40}
@@ -146,9 +214,27 @@ function CurrentAccountControls() {
         <HStack gap={4} alignItems="center">
           <UIText
             kind="headline/h3"
-            style={{ display: 'inline-flex', alignItems: 'center' }}
+            style={{
+              display: 'grid',
+              gridAutoFlow: 'column',
+              alignItems: 'center',
+            }}
           >
-            <WalletDisplayName wallet={wallet} maxCharacters={16} />
+            <WalletDisplayName
+              wallet={wallet}
+              maxCharacters={16}
+              render={(data) => (
+                <span
+                  style={{
+                    overflow: 'hidden',
+                    whiteSpace: 'nowrap',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {data.value}
+                </span>
+              )}
+            />
             <ArrowDownIcon
               className="content-hover"
               style={{ width: 24, height: 24 }}
@@ -156,10 +242,63 @@ function CurrentAccountControls() {
           </UIText>
         </HStack>
       </Button>
-      <CopyButton address={addressToCopy} />
+      <CopyButton
+        title="Copy Address"
+        textToCopy={addressToCopy}
+        tooltipContent="Address Copied"
+      />
 
       <RenderArea name="wallet-name-end" />
     </HStack>
+  );
+}
+
+const ZERION_ORIGIN = 'https://app.zerion.io';
+
+function RewardsLinkIcon({
+  currentWallet,
+}: {
+  currentWallet: ExternallyOwnedAccount;
+}) {
+  const { pathname } = useLocation();
+  const { mutate: acceptZerionOrigin } = useMutation({
+    mutationFn: async () => {
+      return walletPort.request('acceptOrigin', {
+        origin: ZERION_ORIGIN,
+        address: currentWallet.address,
+      });
+    },
+  });
+
+  const addWalletParams = useWalletParams(currentWallet);
+
+  return (
+    <Button
+      kind="ghost"
+      as={UnstyledAnchor}
+      href={`${ZERION_ORIGIN}/rewards?${addWalletParams}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      size={36}
+      title="Rewards"
+      style={{ paddingInline: 8 }}
+      onClick={() => {
+        emitter.emit('buttonClicked', {
+          buttonScope: 'Loaylty',
+          buttonName: 'Rewards',
+          pathname,
+        });
+        acceptZerionOrigin();
+      }}
+    >
+      <RewardsIcon
+        style={{
+          width: 20,
+          height: 20,
+          color: 'linear-gradient(90deg, #a024ef 0%, #fdbb6c 100%)',
+        }}
+      />
+    </Button>
   );
 }
 
@@ -197,35 +336,70 @@ function RenderTimeMeasure() {
   return null;
 }
 
+function ReadonlyMode() {
+  return (
+    <div
+      style={{
+        backgroundColor: 'var(--neutral-100)',
+        borderRadius: 8,
+        padding: '8px 12px',
+      }}
+    >
+      <UIText kind="small/accent" color="var(--neutral-500)">
+        <HStack gap={8} justifyContent="space-between">
+          <HStack gap={8}>
+            <ReadonlyIcon />
+            <span>You’re in view-only mode</span>
+          </HStack>
+          <TextLink
+            to="/get-started/existing-select"
+            style={{ color: 'var(--primary)' }}
+          >
+            Import Wallet
+          </TextLink>
+        </HStack>
+      </UIText>
+    </div>
+  );
+}
+
 function OverviewComponent() {
   useBodyStyle(
     useMemo(() => ({ ['--background' as string]: 'var(--z-index-0)' }), [])
   );
+  const { currency } = useCurrency();
   const location = useLocation();
   const { singleAddress, params, ready, singleAddressNormalized } =
     useAddressParams();
   useProfileName({ address: singleAddress, name: null });
-  const [filterChain, setFilterChain] = useState<string | null>(null);
-  const { value, isLoading: isLoadingPortfolio } = useAddressPortfolio(
-    {
-      ...params,
-      currency: 'usd',
-      portfolio_fields: 'all',
-      use_portfolio_service: true,
-    },
-    { enabled: ready }
+  const { data: walletGroup } = useQuery({
+    queryKey: ['getWalletGroupByAddress', singleAddress],
+    queryFn: () => getWalletGroupByAddress(singleAddress),
+  });
+  const isReadonlyGroup =
+    walletGroup && isReadonlyContainer(walletGroup.walletContainer);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filterChain = searchParams.get('chain') || null;
+  const setFilterChain = useEvent((value: string | null) => {
+    // setSearchParams is not a stable reference: https://github.com/remix-run/react-router/issues/9304
+    setSearchParams(value ? [['chain', value]] : '');
+  });
+  const { data, isLoading: isLoadingPortfolio } = useWalletPortfolio(
+    { addresses: [params.address], currency },
+    { source: useHttpClientSource() },
+    { enabled: ready, refetchInterval: 40000 }
   );
+  const walletPortfolio = data?.data;
 
-  const handleTabChange = useCallback(
-    (to: string) => {
-      const isActiveTabClicked = location.pathname === to;
-      window.scrollTo({
-        behavior: isActiveTabClicked ? 'smooth' : 'instant',
-        top: Math.min(window.scrollY, getTabsOffset()),
-      });
-    },
-    [location]
-  );
+  const offsetValuesState = useStore(offsetValues);
+
+  const handleTabChange = (to: string) => {
+    const isActiveTabClicked = location.pathname === to;
+    window.scrollTo({
+      behavior: isActiveTabClicked ? 'smooth' : 'instant',
+      top: Math.min(window.scrollY, getCurrentTabsOffset(offsetValuesState)),
+    });
+  };
 
   const { data: tabData } = useQuery({
     queryKey: ['activeTab/origin'],
@@ -241,6 +415,10 @@ function OverviewComponent() {
     suspense: false,
   });
 
+  const { data: loyaltyEnabled } = useRemoteConfigValue(
+    'extension_loyalty_enabled'
+  );
+
   // Update backend record with 'platform: extension'
   useEffect(() => {
     if (singleAddressNormalized) {
@@ -255,12 +433,87 @@ function OverviewComponent() {
   const dappChain = isConnected ? siteChain?.toString() : null;
 
   const tabFallback = (
-    <CenteredFillViewportView maxHeight={MIN_TAB_CONTENT_HEIGHT}>
+    <CenteredFillViewportView
+      maxHeight={getMinTabContentHeight(offsetValuesState)}
+    >
       <DelayedRender delay={2000}>
         <ViewLoading kind="network" />
       </DelayedRender>
     </CenteredFillViewportView>
   );
+
+  const { preferences, setPreferences } = usePreferences();
+  const isTestnetMode = Boolean(preferences?.testnetMode?.on);
+  const isTestnetModeOnFirstRender = useRef<boolean | null>(isTestnetMode);
+  useEffect(() => {
+    // reset filter chain when switching between modes
+    // so that we do not show unsupported network data
+    if (isTestnetModeOnFirstRender.current !== isTestnetMode) {
+      isTestnetModeOnFirstRender.current = null; // make it never equal current value
+      setFilterChain(null);
+    }
+  }, [isTestnetMode, setFilterChain]);
+  const testnetGuardView = (
+    <CenteredFillViewportView
+      adjustForNavigationBar={true}
+      maxHeight={getMinTabContentHeight(offsetValuesState)}
+    >
+      <FillView>
+        <EmptyView2
+          title="Wrong Environment"
+          message={
+            <div>
+              {preferences?.testnetMode?.on ? (
+                <UnstyledButton
+                  className="underline hover:no-underline"
+                  onClick={() => {
+                    setPreferences({ testnetMode: null });
+                  }}
+                >
+                  Turn off Testnet Mode
+                </UnstyledButton>
+              ) : (
+                <UnstyledButton
+                  className="underline hover:no-underline"
+                  onClick={() => {
+                    setPreferences({ testnetMode: { on: true } });
+                  }}
+                >
+                  Turn on Testnet Mode
+                </UnstyledButton>
+              )}{' '}
+              or change your network
+            </div>
+          }
+        />
+      </FillView>
+    </CenteredFillViewportView>
+  );
+
+  /**
+   * Creates href such that "chain" search-param is preserved between
+   * tabs, but clicking on current tab resets searchParams
+   */
+  const createTo = (to: string, { end = false } = {}) => {
+    if (!filterChain) {
+      return to;
+    }
+    const isActiveRoute = end
+      ? location.pathname === to
+      : location.pathname.startsWith(to);
+    if (isActiveRoute) {
+      return to;
+    } else {
+      return `${to}?chain=${filterChain}`;
+    }
+  };
+
+  const { data: currentWallet } = useQuery({
+    queryKey: ['wallet/uiGetCurrentWallet'],
+    queryFn: () => {
+      return walletPort.request('uiGetCurrentWallet');
+    },
+  });
 
   return (
     <PageColumn
@@ -278,13 +531,8 @@ function OverviewComponent() {
           paddingInline: 0,
         }}
       >
-        <div
-          style={{ backgroundColor: 'var(--background)', paddingInline: 16 }}
-        >
-          <Spacer height={16} />
-          <ConnectionHeader />
-          <Spacer height={16} />
-        </div>
+        <ConnectionHeader />
+        <BackupReminder />
         <div style={{ backgroundColor: 'var(--white)' }}>
           <Spacer height={16} />
           <div
@@ -297,7 +545,15 @@ function OverviewComponent() {
             }}
           >
             <CurrentAccountControls />
-            <SettingsLinkIcon />
+            <HStack gap={0} alignItems="center">
+              {FEATURE_LOYALTY_FLOW === 'on' &&
+              loyaltyEnabled &&
+              currentWallet ? (
+                <RewardsLinkIcon currentWallet={currentWallet} />
+              ) : null}
+              <SettingsLinkIcon />
+              <SidepanelOptionsButton />
+            </HStack>
           </div>
           <Spacer height={16} />
         </div>
@@ -317,24 +573,31 @@ function OverviewComponent() {
               icon={
                 <WalletSourceIcon
                   address={singleAddress}
+                  groupId={null}
                   style={{ width: 24, height: 24 }}
+                  borderRadius={8}
+                  cutoutStroke={3}
                 />
               }
             />
           ) : null}
           <VStack gap={0}>
             <UIText kind="headline/h1">
-              {value?.total_value != null ? (
+              {walletPortfolio?.totalValue != null ? (
                 <NeutralDecimals
-                  parts={formatCurrencyToParts(value.total_value, 'en', 'usd')}
+                  parts={formatCurrencyToParts(
+                    walletPortfolio.totalValue,
+                    'en',
+                    currency
+                  )}
                 />
               ) : (
                 NBSP
               )}
             </UIText>
-            {value?.relative_change_24h ? (
+            {walletPortfolio?.change24h.relative ? (
               <PercentChange
-                value={value.relative_change_24h}
+                value={walletPortfolio.change24h.relative}
                 locale="en"
                 render={(change) => {
                   const sign = change.isPositive ? '+' : '';
@@ -348,11 +611,11 @@ function OverviewComponent() {
                       }
                     >
                       {`${sign}${change.formatted}`}{' '}
-                      {value?.absolute_change_24h
+                      {walletPortfolio?.change24h.absolute
                         ? `(${formatCurrencyValue(
-                            Math.abs(value.absolute_change_24h),
+                            Math.abs(walletPortfolio.change24h.absolute),
                             'en',
-                            'usd'
+                            currency
                           )})`
                         : ''}{' '}
                       Today
@@ -368,21 +631,19 @@ function OverviewComponent() {
       </div>
       <Spacer height={16} />
       <div style={{ paddingInline: 'var(--column-padding-inline)' }}>
-        <ActionButtonsRow />
+        {isReadonlyGroup ? <ReadonlyMode /> : <ActionButtonsRow />}
       </div>
       <DevelopmentOnly>
         <RenderTimeMeasure />
       </DevelopmentOnly>
-      <Spacer height={24} />
-      <div style={{ paddingInline: 'var(--column-padding-inline)' }}>
-        <OverviewDnaBanners address={singleAddressNormalized} />
-      </div>
+      <Spacer height={isReadonlyGroup ? 16 : 24} />
+      <Banners address={singleAddressNormalized} />
       <div id={TABS_OFFSET_METER_ID} />
       <PageFullBleedColumn
         paddingInline={false}
         style={{
           position: 'sticky',
-          top: TAB_STICKY_OFFSET,
+          top: getStickyOffset(offsetValuesState),
           zIndex: 'var(--max-layout-index)',
           backgroundColor: 'var(--background)',
         }}
@@ -413,26 +674,26 @@ function OverviewComponent() {
               }}
             />
             <SegmentedControlLink
-              to="/overview"
+              to={createTo('/overview', { end: true })}
               end={true}
               onClick={() => handleTabChange('/overview')}
             >
               Tokens
             </SegmentedControlLink>
             <SegmentedControlLink
-              to="/overview/nfts"
+              to={createTo('/overview/nfts')}
               onClick={() => handleTabChange('/overview/nfts')}
             >
               NFTs
             </SegmentedControlLink>
             <SegmentedControlLink
-              to="/overview/history"
+              to={createTo('/overview/history')}
               onClick={() => handleTabChange('/overview/history')}
             >
               History <PendingTransactionsIndicator />
             </SegmentedControlLink>
             <SegmentedControlLink
-              to="/overview/feed"
+              to={createTo('/overview/feed')}
               onClick={() => handleTabChange('/overview/feed')}
             >
               Perks
@@ -451,7 +712,7 @@ function OverviewComponent() {
           ['--surface-background-color' as string]: 'var(--white)',
         }}
       >
-        <div style={{ minHeight: MIN_TAB_CONTENT_HEIGHT }}>
+        <div style={{ minHeight: getMinTabContentHeight(offsetValuesState) }}>
           <Routes>
             <Route
               path="/"
@@ -462,16 +723,28 @@ function OverviewComponent() {
                     style={{
                       height: TAB_TOP_PADDING,
                       position: 'sticky',
-                      top: TAB_STICKY_OFFSET + TAB_SELECTOR_HEIGHT,
+                      top:
+                        getStickyOffset(offsetValuesState) +
+                        TAB_SELECTOR_HEIGHT,
                       zIndex: 1,
                       backgroundColor: 'var(--white)',
                     }}
                   />
-                  <Positions
+                  <TestnetworkGuard
                     dappChain={dappChain || null}
-                    filterChain={filterChain}
-                    onChainChange={setFilterChain}
-                  />
+                    renderGuard={() => testnetGuardView}
+                  >
+                    <VStack gap={20}>
+                      {!isReadonlyGroup && loyaltyEnabled ? (
+                        <XpDropBanner address={params.address} />
+                      ) : null}
+                      <Positions
+                        dappChain={dappChain || null}
+                        filterChain={filterChain}
+                        onChainChange={setFilterChain}
+                      />
+                    </VStack>
+                  </TestnetworkGuard>
                 </ViewSuspense>
               }
             />
@@ -481,11 +754,16 @@ function OverviewComponent() {
                 <ViewSuspense logDelays={true} fallback={tabFallback}>
                   <NavigationTitle title={null} documentTitle="NFTs" />
                   <Spacer height={TAB_TOP_PADDING} />
-                  <NonFungibleTokens
+                  <TestnetworkGuard
                     dappChain={dappChain || null}
-                    filterChain={filterChain}
-                    onChainChange={setFilterChain}
-                  />
+                    renderGuard={() => testnetGuardView}
+                  >
+                    <NonFungibleTokens
+                      dappChain={dappChain || null}
+                      filterChain={filterChain}
+                      onChainChange={setFilterChain}
+                    />
+                  </TestnetworkGuard>
                 </ViewSuspense>
               }
             />
@@ -495,7 +773,16 @@ function OverviewComponent() {
                 <ViewSuspense logDelays={true} fallback={tabFallback}>
                   <NavigationTitle title={null} documentTitle="History" />
                   <Spacer height={TAB_TOP_PADDING} />
-                  <HistoryList />
+                  <TestnetworkGuard
+                    dappChain={dappChain || null}
+                    renderGuard={() => testnetGuardView}
+                  >
+                    <HistoryList
+                      dappChain={dappChain || null}
+                      filterChain={filterChain}
+                      onChainChange={setFilterChain}
+                    />
+                  </TestnetworkGuard>
                 </ViewSuspense>
               }
             />

@@ -1,9 +1,13 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Route, Routes, useSearchParams } from 'react-router-dom';
+import { RenderArea } from 'react-area';
+import { isTruthy } from 'is-truthy-ts';
 import type { AddEthereumChainParameter } from 'src/modules/ethereum/types/AddEthereumChainParameter';
-import type { NetworkConfig } from 'src/modules/networks/NetworkConfig';
-import { toNetworkConfig } from 'src/modules/networks/helpers';
+import {
+  toAddEthereumChainParameter,
+  toNetworkConfig,
+} from 'src/modules/networks/helpers';
 import { invariant } from 'src/shared/invariant';
 import { useBackgroundKind } from 'src/ui/components/Background/Background';
 import { PageBottom } from 'src/ui/components/PageBottom';
@@ -18,14 +22,13 @@ import { VStack } from 'src/ui/ui-kit/VStack';
 import { useNetworks } from 'src/modules/networks/useNetworks';
 import { ViewLoading } from 'src/ui/components/ViewLoading';
 import { NavigationTitle } from 'src/ui/components/NavigationTitle';
-import { RenderArea } from 'react-area';
 import { PageStickyFooter } from 'src/ui/components/PageStickyFooter';
-import type { EthereumChainConfig } from 'src/modules/ethereum/chains/ChainConfigStore';
-import { valueToHex } from 'src/shared/units/valueToHex';
-import { createChain } from 'src/modules/networks/Chain';
-import { networksStore } from 'src/modules/networks/networks-store.client';
+import type { EthereumChainConfig } from 'src/modules/ethereum/chains/types';
+import { getNetworksStore } from 'src/modules/networks/networks-store.client';
 import { Networks } from 'src/modules/networks/Networks';
-import { KeyboardShortcut } from 'src/ui/components/KeyboardShortcut';
+import { DelayedRender } from 'src/ui/components/DelayedRender';
+import { normalizeChainId } from 'src/shared/normalizeChainId';
+import { injectChainConfig } from 'src/modules/networks/injectChainConfig';
 import { NetworkForm } from '../Networks/NetworkForm';
 import { NetworkCreateSuccess } from '../Networks/NetworkCreateSuccess';
 import { NetworkUpdateSuccess } from '../Networks/NetworkUpdateSuccess';
@@ -34,17 +37,19 @@ import { RpcUrlHelp } from './RpcUrlHelp';
 
 interface AddChainResult {
   config: EthereumChainConfig;
-  prevNetwork: NetworkConfig | null;
+  prevChainConfig: AddEthereumChainParameter | null;
 }
 
 function AddOrUpdateChain({
   origin,
   addEthereumChainParameterStringified,
+  onKeepCurrent,
   onReject,
   onSuccess,
 }: {
   origin: string;
   addEthereumChainParameterStringified: string;
+  onKeepCurrent: () => void;
   onReject: () => void;
   onSuccess: (value: AddChainResult) => void;
 }) {
@@ -58,27 +63,50 @@ function AddOrUpdateChain({
     [addEthereumChainParameterStringified]
   );
 
-  const { networks } = useNetworks();
+  const chainId = normalizeChainId(addEthereumChainParameter.chainId);
+  const { networks, loadNetworkByChainId } = useNetworks();
+
+  const { data: updatedNetworks, isLoading } = useQuery({
+    queryKey: ['loadNetworkByChainId', chainId],
+    queryFn: () => loadNetworkByChainId(chainId),
+    enabled: Boolean(chainId),
+    useErrorBoundary: false,
+    suspense: false,
+  });
 
   const { network, prevNetwork } = useMemo(() => {
-    const chainId = valueToHex(addEthereumChainParameter.chainId);
-    const prevNetwork = networks?.hasNetworkById(chainId)
-      ? networks.getNetworkById(chainId) ?? null
+    const prevNetwork = updatedNetworks?.hasNetworkById(chainId)
+      ? updatedNetworks.getNetworkById(chainId) ?? null
       : null;
-    const chain = prevNetwork ? createChain(prevNetwork.chain) : null;
-    const network = toNetworkConfig(addEthereumChainParameter, chain);
+    const network = prevNetwork
+      ? injectChainConfig(prevNetwork, addEthereumChainParameter)
+      : toNetworkConfig(addEthereumChainParameter, null);
     return { network, prevNetwork };
-  }, [addEthereumChainParameter, networks]);
+  }, [addEthereumChainParameter, updatedNetworks, chainId]);
 
   const addEthereumChainMutation = useMutation({
-    mutationFn: async (param: NetworkConfig) => {
+    mutationFn: async ({
+      networkId,
+      param,
+    }: {
+      networkId: string;
+      param: AddEthereumChainParameter;
+    }) => {
       const config = await walletPort.request('addEthereumChain', {
         values: [param],
         origin,
+        chain: networkId,
+        prevChain: null,
       });
-      return { config, prevNetwork };
+      return {
+        config,
+        prevChainConfig: prevNetwork
+          ? toAddEthereumChainParameter(prevNetwork)
+          : null,
+      };
     },
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
+      const networksStore = await getNetworksStore();
       networksStore.update();
       onSuccess(result);
     },
@@ -86,11 +114,16 @@ function AddOrUpdateChain({
 
   const restrictedChainIds = useMemo(() => {
     return networks
-      ? new Set(networks.getAllNetworks().map((n) => n.external_id))
+      ? new Set(
+          networks
+            .getNetworks()
+            .map((n) => Networks.getChainId(n))
+            .filter(isTruthy)
+        )
       : null;
   }, [networks]);
 
-  if (!restrictedChainIds) {
+  if (!restrictedChainIds || isLoading) {
     return <ViewLoading kind="network" />;
   }
 
@@ -132,19 +165,26 @@ function AddOrUpdateChain({
             prevNetwork={prevNetwork}
             rpcUrlHelpHref={`/addEthereumChain/what-is-rpc-url?${params}`}
             isSubmitting={addEthereumChainMutation.isLoading}
-            onCancel={onReject}
-            onSubmit={(network) => {
-              addEthereumChainMutation.mutate(network);
+            onKeepCurrent={onKeepCurrent}
+            onSubmit={(networkId, result) => {
+              addEthereumChainMutation.mutate({
+                networkId,
+                param: result,
+              });
             }}
           />
         ) : (
           <NetworkForm
-            network={network}
+            chain={network.id}
+            chainConfig={addEthereumChainParameter}
             submitText="Add"
             isSubmitting={addEthereumChainMutation.isLoading}
             onCancel={onReject}
-            onSubmit={(network) => {
-              addEthereumChainMutation.mutate(network);
+            onSubmit={(networkId, result) => {
+              addEthereumChainMutation.mutate({
+                networkId,
+                param: result,
+              });
             }}
             restrictedChainIds={restrictedChainIds}
             disabledFields={null}
@@ -154,6 +194,18 @@ function AddOrUpdateChain({
         <PageBottom />
       </PageColumn>
       <PageStickyFooter>
+        {isLoading ? (
+          <DelayedRender delay={500}>
+            <Spacer height={8} />
+            <UIText
+              kind="caption/regular"
+              color="var(--neutral-500)"
+              style={{ textAlign: 'center' }}
+            >
+              Fetching Additional Network Info
+            </UIText>
+          </DelayedRender>
+        ) : null}
         <Spacer height={16} />
         <RenderArea name="add-ethereum-chain-footer" />
         <PageBottom />
@@ -177,14 +229,14 @@ function AddEthereumChainContent({
   useBackgroundKind({ kind: 'white' });
 
   if (result) {
-    return result.prevNetwork ? (
+    return result.prevChainConfig ? (
       <NetworkUpdateSuccess
-        network={result.config.value}
-        prevNetwork={result.prevNetwork}
+        chainConfig={result.config.value}
+        prevChainConfig={result.prevChainConfig}
         onClose={onDone}
       />
     ) : (
-      <NetworkCreateSuccess network={result.config.value} onDone={onDone} />
+      <NetworkCreateSuccess chainConfig={result.config.value} onDone={onDone} />
     );
   }
 
@@ -194,6 +246,7 @@ function AddEthereumChainContent({
         addEthereumChainParameterStringified
       }
       origin={origin}
+      onKeepCurrent={onDone}
       onReject={onReject}
       onSuccess={(result) => setResult(result)}
     />
@@ -211,6 +264,7 @@ export function AddEthereumChain() {
     addEthereumChainParameter,
     'addEtheretumChainParameter get-parameter is required for this view'
   );
+
   const handleReject = useCallback(
     () => windowPort.reject(windowId),
     [windowId]
@@ -218,7 +272,6 @@ export function AddEthereumChain() {
 
   return (
     <>
-      <KeyboardShortcut combination="esc" onKeyDown={handleReject} />
       <Routes>
         <Route
           path="/"

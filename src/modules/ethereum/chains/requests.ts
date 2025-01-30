@@ -1,15 +1,16 @@
-import { client } from 'defi-sdk';
+import { type Client } from 'defi-sdk';
 import type { NetworkConfig } from 'src/modules/networks/NetworkConfig';
 import { rejectAfterDelay } from 'src/shared/rejectAfterDelay';
-import type { ChainConfig } from './ChainConfigStore';
 
-function fetchChains(
+export function fetchChains(
   payload: {
     supported_only?: boolean;
     include_testnets?: boolean;
     group?: 'testnets';
     search_query?: string;
-  } = { supported_only: true }
+    ids?: string[];
+  },
+  client: Client
 ): Promise<NetworkConfig[]> {
   return new Promise((resolve) => {
     const { unsubscribe } = client.cachedSubscribe<
@@ -22,46 +23,38 @@ function fetchChains(
         scope: ['info'],
         payload,
       },
-      onData: ({ value }) => {
+      onData: ({ value, isStale }) => {
         if (value) {
           resolve(value);
-          unsubscribe();
+          if (!isStale) {
+            // TEMP: timeout fixes the "Cannot access 'unsubscribe' before initialization" error
+            // This should be fixed in defi-sdk
+            setTimeout(() => unsubscribe());
+          }
         }
       },
     });
   });
 }
 
-export async function getNetworksBySearch({ query }: { query: string }) {
-  const networks = await fetchChains({
-    include_testnets: true,
-    supported_only: false,
-    search_query: query.trim().toLowerCase(),
-  });
-  return networks.slice(0, 20);
-}
-
-async function fetchTestnets() {
-  const networks = await fetchChains({
-    include_testnets: true,
-    group: 'testnets',
-    supported_only: false,
-  });
-  return {
-    ethereumChains: networks.map((network) => ({
-      created: 0,
-      updated: 0,
-      origin: 'predefined',
-      value: network,
-    })),
-  };
-}
-
-const MAX_WAIT_TIME_MS = 12000;
-
-export async function getPredefinedChains(): Promise<ChainConfig> {
+export async function getNetworksBySearch({
+  query,
+  client,
+  includeTestnets,
+}: {
+  query: string;
+  client: Client;
+  includeTestnets: boolean;
+}) {
   return Promise.race([
-    fetchTestnets(),
-    rejectAfterDelay(MAX_WAIT_TIME_MS, 'fetchTestnets'),
+    fetchChains(
+      {
+        include_testnets: includeTestnets,
+        supported_only: false,
+        search_query: query.trim().toLowerCase(),
+      },
+      client
+    ),
+    rejectAfterDelay(12000, `getNetworksBySearch(${query})`),
   ]);
 }

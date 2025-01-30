@@ -1,5 +1,4 @@
 import throttle from 'lodash/throttle';
-import { useQuery } from '@tanstack/react-query';
 import ky from 'ky';
 import { PROXY_URL } from 'src/env/config';
 import type { ConfigPlugin } from '../ConfigPlugin';
@@ -9,14 +8,20 @@ import type { RemoteConfig } from '../types';
 const defaultConfig: RemoteConfig = {
   extension_wallet_name_flags: {},
   extension_uninstall_link: '',
+  extension_loyalty_enabled: true,
+  loyalty_config: {},
 };
 
 const knownKeys: (keyof RemoteConfig)[] = [
   'extension_wallet_name_flags',
   'extension_uninstall_link',
+  'extension_loyalty_enabled',
+  'loyalty_config',
 ];
 
-async function fetchRemoteConfig<T extends keyof RemoteConfig>(keys: T[]) {
+export async function fetchRemoteConfig<T extends keyof RemoteConfig>(
+  keys: T[]
+) {
   const params = new URLSearchParams(keys.map((key) => ['key', key]));
   return ky
     .get(new URL(`remote-config?${params.toString()}`, PROXY_URL), {
@@ -27,6 +32,18 @@ async function fetchRemoteConfig<T extends keyof RemoteConfig>(keys: T[]) {
 }
 
 let remoteConfig: RemoteConfig | undefined;
+
+function isEmptyConfig(maybeConfig: Partial<RemoteConfig>) {
+  if (!maybeConfig) {
+    return true;
+  }
+  for (const knownKey of knownKeys) {
+    if (knownKey in maybeConfig) {
+      return false;
+    }
+  }
+  return true;
+}
 
 const REFRESH_RATE = 1000 * 60 * 5;
 
@@ -57,25 +74,11 @@ export const firebase: ConfigPlugin & { refresh(): void } = {
      * By doing this, we make the remoteConfig "eventually up-to-date"
      */
     firebase.refresh();
-    const config = remoteConfig ?? defaultConfig;
+    const config =
+      remoteConfig && !isEmptyConfig(remoteConfig)
+        ? remoteConfig
+        : defaultConfig;
     const value = config[key];
     return { value };
   },
 };
-
-export function useFirebaseConfig<T extends keyof RemoteConfig>(
-  keys: T[],
-  { suspense = false }: { suspense?: boolean } = {}
-) {
-  return useQuery({
-    // it's okay to put the `keys` array inside queryKey array without memoizing:
-    // it will be stringified anyway
-    // https://github.com/TanStack/query/blob/b18426da86e2b8990e8f4e7398baaf041f77ad19/packages/query-core/src/utils.ts#L269-L280
-    queryKey: ['fetchRemoteConfig', keys],
-    queryFn: () => fetchRemoteConfig(keys),
-    retry: 0,
-    refetchOnWindowFocus: false,
-    staleTime: 20000,
-    suspense,
-  });
-}

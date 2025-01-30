@@ -1,19 +1,24 @@
-import { addressPortfolio, client, type Portfolio } from 'defi-sdk';
+import { addressPortfolioDecomposition, client } from 'defi-sdk';
+import { type PortfolioDecomposition } from 'defi-sdk';
 
-export function getAddressPortfolio({ address }: { address: string }) {
-  return new Promise<Portfolio>((resolve) => {
-    return addressPortfolio(
+export function getAddressPortfolio({
+  address,
+  currency,
+}: {
+  address: string;
+  currency: string;
+}) {
+  return new Promise<PortfolioDecomposition>((resolve) => {
+    return addressPortfolioDecomposition(
       {
         address,
-        currency: 'usd',
-        portfolio_fields: 'all',
-        use_portfolio_service: true,
+        currency,
       },
       {
         client,
         method: 'get',
         onData(data) {
-          resolve(data.portfolio);
+          resolve(data['portfolio-decomposition']);
         },
       }
     );

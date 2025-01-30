@@ -8,8 +8,7 @@ import {
   useTrail,
 } from '@react-spring/web';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useAddressPositions } from 'defi-sdk';
-import { payloadId } from '@json-rpc-tools/utils';
+import { payloadId } from '@walletconnect/jsonrpc-utils';
 import type BigNumber from 'bignumber.js';
 import { VStack } from 'src/ui/ui-kit/VStack';
 import { UIText } from 'src/ui/ui-kit/UIText';
@@ -30,8 +29,12 @@ import { AddressDetails } from 'src/ui/pages/Receive/AddressDetails';
 import type { HTMLDialogElementInterface } from 'src/ui/ui-kit/ModalDialogs/HTMLDialogElementInterface';
 import { INTERNAL_ORIGIN } from 'src/background/constants';
 import { invariant } from 'src/shared/invariant';
-import { SidePanel } from 'src/ui/Onboarding/FAQ/SidePanel';
 import { useGasPrices } from 'src/ui/shared/requests/useGasPrices';
+import { useCurrency } from 'src/modules/currency/useCurrency';
+import { SidePanel } from 'src/ui/features/onboarding/shared/SidePanel';
+import { useHttpClientSource } from 'src/modules/zerion-api/hooks/useHttpClientSource';
+import { useHttpAddressPositions } from 'src/modules/zerion-api/hooks/useWalletPositions';
+import { usePositionsRefetchInterval } from 'src/ui/transactions/usePositionsRefetchInterval';
 import * as helpersStyles from '../../shared/styles.module.css';
 import { Step } from '../../shared/Step';
 import { DNA_MINT_CONTRACT_ADDRESS } from '../../shared/constants';
@@ -63,21 +66,22 @@ function useDnaMintTransaction(address: string) {
     onFeeValueCommonReady: null,
   });
   const feeValueFiat = costs?.totalValueFiat;
+  const { currency } = useCurrency();
 
-  const { value, isLoading: positionsAreLoading } = useAddressPositions(
+  const { data, isLoading: positionsAreLoading } = useHttpAddressPositions(
+    { addresses: [address], assetIds: ['eth'], currency },
+    { source: useHttpClientSource() },
     {
-      address,
-      assets: ['eth'],
-      currency: 'usd',
-    },
-    { enabled: Boolean(address) }
+      enabled: Boolean(address),
+      refetchInterval: usePositionsRefetchInterval(false),
+    }
   );
 
   const ethPosition = useMemo(() => {
-    return value?.positions?.find(
+    return data?.data?.find(
       (item) => item.chain === NetworkId.Ethereum && item.type === 'asset'
     );
-  }, [value]);
+  }, [data]);
 
   const hasEnoughEth =
     Number(ethPosition?.value || 0) > Number(feeValueFiat || 0);
@@ -101,6 +105,8 @@ function MintDnaContent({
   loading: boolean;
   waitingForConfirmation: boolean;
 }) {
+  const { currency } = useCurrency();
+
   return (
     <VStack gap={32} style={{ justifyItems: 'center' }}>
       <VStack gap={12} style={{ justifyItems: 'center' }}>
@@ -124,7 +130,7 @@ function MintDnaContent({
             <HStack gap={8} alignItems="center">
               <UIText kind="caption/regular">Network Fee</UIText>
               <UIText kind="caption/accent">
-                {formatCurrencyValue(feeValueFiat, 'en', 'usd')}
+                {formatCurrencyValue(feeValueFiat, 'en', currency)}
               </UIText>
             </HStack>
           ) : null}
@@ -224,7 +230,7 @@ export function MintDna() {
     useMutation({
       mutationFn: async () => {
         return walletPort.request('openSendTransaction', {
-          params: [mintTransaction],
+          params: [mintTransaction, { clientScope: 'Zerion DNA' }],
           context: { origin: INTERNAL_ORIGIN },
           id: payloadId(),
         });

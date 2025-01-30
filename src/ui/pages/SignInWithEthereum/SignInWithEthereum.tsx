@@ -1,10 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
 import { invariant } from 'src/shared/invariant';
 import { Background } from 'src/ui/components/Background';
 import { Badge } from 'src/ui/components/Badge';
-import { KeyboardShortcut } from 'src/ui/components/KeyboardShortcut';
 import { PageColumn } from 'src/ui/components/PageColumn';
 import { PageTop } from 'src/ui/components/PageTop';
 import { SiteFaviconImg } from 'src/ui/components/SiteFaviconImg';
@@ -24,15 +22,18 @@ import { toUtf8String } from 'src/modules/ethereum/message-signing/toUtf8String'
 import SignInIcon from 'jsx:src/ui/assets/sign-in.svg';
 import { VerifyUser } from 'src/ui/components/VerifyUser';
 import { Surface } from 'src/ui/ui-kit/Surface';
-import { usePersonalSignMutation } from 'src/ui/shared/requests/message-signing';
 import { PhishingDefenceStatus } from 'src/ui/components/PhishingDefence/PhishingDefenceStatus';
 import { NavigationBar } from 'src/ui/components/NavigationBar';
 import { PageBottom } from 'src/ui/components/PageBottom';
 import { NavigationTitle } from 'src/ui/components/NavigationTitle';
 import { isDeviceAccount } from 'src/shared/types/validators';
-import { useErrorBoundary } from 'src/ui/shared/useErrorBoundary';
-import { getError } from 'src/shared/errors/getError';
-import { HardwareSignMessage } from '../HardwareWalletConnection/HardwareSignMessage';
+import type { SignMsgBtnHandle } from 'src/ui/components/SignMessageButton';
+import { SignMessageButton } from 'src/ui/components/SignMessageButton';
+import { ellipsis } from 'src/ui/shared/typography';
+import { useSearchParams } from 'react-router-dom';
+import { updateSearchParam } from 'src/ui/shared/updateSearchParam';
+import { usePreferences } from 'src/ui/features/preferences';
+import { wait } from 'src/shared/wait';
 import { txErrorToMessage } from '../SendTransaction/shared/transactionErrorToMessage';
 import { SpeechBubble } from './SpeechBubble/SpeechBubble';
 import { useFetchUTCTime } from './useFetchUTCTime';
@@ -41,16 +42,9 @@ import { DataVerificationFailed } from './DataVerificationFailed';
 
 export function SignInWithEthereum() {
   const [params, setSearchParams] = useSearchParams();
-  const updateSearchParam = (
-    key: string,
-    value: string,
-    navigateOptions?: Parameters<typeof setSearchParams>[1]
-  ) => {
-    const newParams = new URLSearchParams(params);
-    newParams.set(key, value);
-    setSearchParams(newParams, navigateOptions);
-  };
+  const { preferences } = usePreferences();
 
+  const clientScope = params.get('clientScope') || 'External Dapp';
   const origin = params.get('origin');
   const windowId = params.get('windowId');
   const message = params.get('message');
@@ -85,34 +79,32 @@ export function SignInWithEthereum() {
 
   const handleSignSuccess = (signature: string) =>
     windowPort.confirm(windowId, signature);
-  const personalSignMutation = usePersonalSignMutation({
-    onSuccess: handleSignSuccess,
-  });
-  const handleSignIn = () => {
-    personalSignMutation.mutate({
-      params: [siweMessage?.rawMessage || ''],
-      initiator: origin,
-    });
-  };
-  const handleReject = () => windowPort.reject(windowId);
 
-  const showErrorBoundary = useErrorBoundary();
-  const [hardwareSignError, setHardwareSignError] = useState<Error | null>(
-    null
-  );
-  const { mutate: registerSignedMessage } = useMutation({
-    mutationFn: async (signature: string) => {
-      if (!wallet) {
-        return;
-      }
-      walletPort.request('registerPersonalSign', {
-        message,
-        address: wallet.address,
+  const signMsgBtnRef = useRef<SignMsgBtnHandle | null>(null);
+
+  const { mutate: personalSign, ...personalSignMutation } = useMutation({
+    mutationFn: async () => {
+      invariant(signMsgBtnRef.current, 'SignMessageButton not found');
+      return signMsgBtnRef.current.personalSign({
+        params: [siweMessage?.rawMessage || ''],
         initiator: origin,
+        clientScope,
       });
+    },
+    // The value returned by onMutate can be accessed in
+    // a global onError handler (src/ui/shared/requests/queryClient.ts)
+    // TODO: refactor to just emit error directly from the mutationFn
+    onMutate: () => 'signMessage',
+    onSuccess: async (signature) => {
+      if (preferences?.enableHoldToSignButton) {
+        // small delay to show success state to the user before closing the popup
+        await wait(500);
+      }
       handleSignSuccess(signature);
     },
   });
+
+  const handleReject = () => windowPort.reject(windowId);
 
   if (isError) {
     return <p>Some Error</p>;
@@ -120,6 +112,9 @@ export function SignInWithEthereum() {
   if (isLoading || !wallet) {
     return null;
   }
+
+  const mustConfirmWithPassword =
+    !siweMessage?.isValid() && !isDeviceAccount(wallet);
 
   return (
     <Background backgroundKind="white">
@@ -190,7 +185,9 @@ export function SignInWithEthereum() {
               <Spacer height={16} />
               <SiweError
                 siwe={siweMessage}
-                onReadMore={() => updateSearchParam('step', 'errors')}
+                onReadMore={() =>
+                  setSearchParams(updateSearchParam('step', 'errors'))
+                }
               />
             </>
           ) : null}
@@ -220,14 +217,15 @@ export function SignInWithEthereum() {
               <PageTop />
               <VerifyUser
                 text="Verification is required in order to ignore the warning and proceed further"
-                onSuccess={handleSignIn}
+                onSuccess={() => personalSign()}
+                buttonTitle="Confirm"
               />
               <PageBottom />
             </>
           ) : null}
         </>
         <Spacer height={16} />
-        <PhishingDefenceStatus origin={origin} />
+        <PhishingDefenceStatus origin={origin} type="dapp" />
         <VStack
           gap={8}
           style={{
@@ -237,84 +235,65 @@ export function SignInWithEthereum() {
             paddingTop: 8,
           }}
         >
-          <UIText kind="caption/regular" color="var(--negative-500)">
-            {personalSignMutation.isError
-              ? getError(personalSignMutation.error).message
-              : hardwareSignError
-              ? txErrorToMessage(hardwareSignError)
-              : null}
-          </UIText>
-          {params.has('step') === false || params.get('step') === 'data' ? (
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: !siweMessage?.isValid()
-                  ? 'none'
-                  : '1fr 1fr',
-                gap: 8,
-                // marginTop: 'auto',
-                // paddingBottom: 32,
-              }}
-            >
-              {/* Temporarily "proceed anyway" flow is only for SignerWallets, not Hardware Wallets */}
-              {!siweMessage?.isValid() && !isDeviceAccount(wallet) ? (
-                <>
-                  <Button ref={focusNode} onClick={handleReject}>
-                    Close
-                  </Button>
-                  <Button
-                    kind="ghost"
-                    onClick={() => updateSearchParam('step', 'verifyUser')}
-                  >
-                    <UIText kind="caption/accent" color="var(--neutral-500)">
-                      Proceed anyway
-                    </UIText>
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button
-                    type="button"
-                    kind="regular"
-                    onClick={handleReject}
-                    ref={focusNode}
-                  >
-                    Cancel
-                  </Button>
-                  {isDeviceAccount(wallet) ? (
-                    <HardwareSignMessage
-                      derivationPath={wallet.derivationPath}
-                      message={message}
-                      type="personalSign"
-                      // TODO: there's no async isSigning state for hardware, remove prop? Also in pages/SignMessage
-                      isSigning={personalSignMutation.isLoading}
-                      onBeforeSign={() => setHardwareSignError(null)}
-                      onSignError={(error) => setHardwareSignError(error)}
-                      onSign={(signature) => {
-                        try {
-                          registerSignedMessage(signature);
-                        } catch (error) {
-                          showErrorBoundary(error);
-                        }
-                      }}
-                    />
-                  ) : (
-                    <Button
-                      disabled={personalSignMutation.isLoading}
-                      onClick={handleSignIn}
-                    >
-                      {personalSignMutation.isLoading
-                        ? 'Signing In...'
-                        : 'Sign In'}
-                    </Button>
-                  )}
-                </>
-              )}
+          {personalSignMutation.isError ? (
+            <UIText kind="caption/regular" color="var(--negative-500)">
+              {txErrorToMessage(personalSignMutation.error)}
+            </UIText>
+          ) : null}
+          {/* "Confirm with password" flow is only for SignerWallets, not Hardware Wallets */}
+          {(params.has('step') === false || params.get('step') === 'data') &&
+          mustConfirmWithPassword ? (
+            <div style={{ display: 'grid', gap: 8 }}>
+              <>
+                <Button ref={focusNode} onClick={handleReject}>
+                  Close
+                </Button>
+                <Button
+                  kind="ghost"
+                  onClick={() => updateSearchParam('step', 'verifyUser')}
+                >
+                  <UIText kind="caption/accent" color="var(--neutral-500)">
+                    Proceed anyway
+                  </UIText>
+                </Button>
+              </>
             </div>
           ) : null}
+          <div
+            style={{
+              // For "proceed anyway" flow we don't show these buttons,
+              // but <SignMessageButton /> MUST stay in DOM in order to work
+              display: mustConfirmWithPassword ? 'none' : 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: 8,
+            }}
+          >
+            <Button
+              type="button"
+              kind="regular"
+              onClick={handleReject}
+              ref={focusNode}
+            >
+              Cancel
+            </Button>
+            {preferences ? (
+              <SignMessageButton
+                ref={signMsgBtnRef}
+                wallet={wallet}
+                onClick={() => personalSign()}
+                buttonTitle={
+                  personalSignMutation.isLoading
+                    ? `Signing In${ellipsis}`
+                    : !siweMessage?.isValid() && isDeviceAccount(wallet)
+                    ? 'Proceed anyway'
+                    : 'Sign In'
+                }
+                holdToSign={preferences.enableHoldToSignButton}
+              />
+            ) : null}
+          </div>
         </VStack>
       </PageColumn>
-      <KeyboardShortcut combination="esc" onKeyDown={handleReject} />
     </Background>
   );
 }

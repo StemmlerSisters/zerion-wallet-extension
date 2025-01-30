@@ -1,10 +1,8 @@
-import { ethers } from 'ethers';
 import React, { useId, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getTransactionCount } from 'src/modules/ethereum/transactions/getTransactionCount';
 import type { IncomingTransaction } from 'src/modules/ethereum/types/IncomingTransaction';
 import type { Chain } from 'src/modules/networks/Chain';
-import { useNetworks } from 'src/modules/networks/useNetworks';
+import { getNetworksStore } from 'src/modules/networks/networks-store.client';
 import { HStack } from 'src/ui/ui-kit/HStack';
 import { UIText } from 'src/ui/ui-kit/UIText';
 import { UnstyledButton } from 'src/ui/ui-kit/UnstyledButton';
@@ -18,15 +16,17 @@ import { InnerLabelInput } from 'src/ui/ui-kit/Input/InnerLabelInput';
 import type { PartiallyRequired } from 'src/shared/type-utils/PartiallyRequired';
 import { collectData } from 'src/ui/shared/form-data';
 import { DelayedRender } from 'src/ui/components/DelayedRender';
+import { uiGetBestKnownTransactionCount } from 'src/modules/ethereum/transactions/getBestKnownTransactionCount/uiGetBestKnownTransactionCount';
+import { valueToHex } from 'src/shared/units/valueToHex';
 
 function parseNonce(untypedValue: unknown) {
   const value = untypedValue as string;
   if (!value) {
     return null;
   } else if (value.startsWith('0x')) {
-    return ethers.utils.hexValue(value);
+    return valueToHex(value);
   } else {
-    return ethers.utils.hexValue(Number(value));
+    return valueToHex(Number(value));
   }
 }
 
@@ -139,15 +139,13 @@ export function NonceLine({
   userNonce: string | null;
   onChange: null | ((nonce: string | null) => void);
 }) {
-  const { networks } = useNetworks();
   const { from } = transaction;
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['getTransactionCount', networks, from, chain],
+    queryKey: ['getTransactionCount', from, chain],
     queryFn: async () => {
-      if (!networks) {
-        return;
-      }
-      return getTransactionCount({
+      const networksStore = await getNetworksStore();
+      const networks = await networksStore.load({ chains: [chain.toString()] });
+      return uiGetBestKnownTransactionCount({
         address: from,
         chain,
         networks,
@@ -155,7 +153,6 @@ export function NonceLine({
       });
     },
     useErrorBoundary: false,
-    enabled: Boolean(networks),
     suspense: true,
   });
   const dialogRef = useRef<HTMLDialogElementInterface | null>(null);
@@ -179,7 +176,7 @@ export function NonceLine({
         <BottomSheetDialog ref={dialogRef} height="90vh">
           <NonceDialogForm
             defaultValue={userNonce ? String(parseInt(userNonce)) : ''}
-            placeholder={nonce ? String(parseInt(nonce)) : ''}
+            placeholder={nonce != null ? String(nonce) : ''}
             onSubmit={(nonce) => {
               dialogRef.current?.close();
               onChange(nonce);

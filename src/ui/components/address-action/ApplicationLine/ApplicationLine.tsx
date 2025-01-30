@@ -1,22 +1,23 @@
-import React, { useLayoutEffect, useState } from 'react';
 import { animated, useTransition } from '@react-spring/web';
 import { capitalize } from 'capitalize-ts';
-import type { Chain } from 'src/modules/networks/Chain';
-import type { Networks } from 'src/modules/networks/Networks';
-import { Media } from 'src/ui/ui-kit/Media';
+import React, { useLayoutEffect, useState } from 'react';
 import ArrowLeftTop from 'jsx:src/ui/assets/arrow-left-top.svg';
-import { UIText } from 'src/ui/ui-kit/UIText';
-import { Image } from 'src/ui/ui-kit/MediaFallback';
+import { toChecksumAddress } from 'src/modules/ethereum/toChecksumAddress';
+import type { AnyAddressAction } from 'src/modules/ethereum/transactions/addressAction';
+import type { Chain } from 'src/modules/networks/Chain';
+import type { NetworkConfig } from 'src/modules/networks/NetworkConfig';
+import type { Networks } from 'src/modules/networks/Networks';
 import { BlockieImg } from 'src/ui/components/BlockieImg';
-import { HStack } from 'src/ui/ui-kit/HStack';
-import { TextAnchor } from 'src/ui/ui-kit/TextAnchor';
-import { truncateAddress } from 'src/ui/shared/truncateAddress';
-import { Surface } from 'src/ui/ui-kit/Surface';
 import { NetworkIcon } from 'src/ui/components/NetworkIcon';
 import { ShuffleText } from 'src/ui/components/ShuffleText';
-import type { AnyAddressAction } from 'src/modules/ethereum/transactions/addressAction';
-import type { NetworkConfig } from 'src/modules/networks/NetworkConfig';
 import { openInNewWindow } from 'src/ui/shared/openInNewWindow';
+import { truncateAddress } from 'src/ui/shared/truncateAddress';
+import { HStack } from 'src/ui/ui-kit/HStack';
+import { Media } from 'src/ui/ui-kit/Media';
+import { Image } from 'src/ui/ui-kit/MediaFallback';
+import { Surface } from 'src/ui/ui-kit/Surface';
+import { TextAnchor } from 'src/ui/ui-kit/TextAnchor';
+import { UIText } from 'src/ui/ui-kit/UIText';
 
 const FadeOutAndIn = ({
   src,
@@ -78,7 +79,7 @@ function ApplicationImage({
             // safari doesn't emit img onError for empty string src
             src={src || 'no-image'}
             alt=""
-            style={{ width: '100%', display: 'block' }}
+            style={{ width: '100%', display: 'block', borderRadius: 8 }}
             renderError={() => (
               <BlockieImg
                 address={
@@ -87,23 +88,49 @@ function ApplicationImage({
                   ''
                 }
                 size={36}
-                borderRadius={6}
+                borderRadius={8}
               />
             )}
           />
 
-          <div style={{ position: 'absolute', bottom: 0, right: 0 }}>
+          <div
+            style={{
+              position: 'absolute',
+              bottom: -2,
+              right: -2,
+            }}
+          >
             <NetworkIcon
-              size={16}
+              size={20}
               name={network?.name || null}
-              chainId={network?.external_id || null}
               src={network?.icon_url || ''}
+              style={{
+                borderRadius: 8,
+                border: '2px solid var(--surface-background-color)',
+              }}
             />
           </div>
         </div>
       )}
-    ></FadeOutAndIn>
+    />
   );
+}
+
+function getApplicationAddress(action: Pick<AnyAddressAction, 'label'>) {
+  const contractAddress = action.label?.display_value.contract_address;
+  if (contractAddress) {
+    return contractAddress;
+  }
+
+  if (!action.label?.value) {
+    return null;
+  }
+
+  try {
+    return toChecksumAddress(action.label.value);
+  } catch {
+    return null;
+  }
 }
 
 export function ApplicationLine({
@@ -115,8 +142,10 @@ export function ApplicationLine({
   chain: Chain;
   networks: Networks;
 }) {
-  const contractAddress = action.label?.display_value.contract_address;
   const network = networks.getNetworkByName(chain) || null;
+
+  // TODO: Remove this hacky fallback once we have backend support
+  const applicationAddress = getApplicationAddress(action);
 
   return (
     <Surface style={{ borderRadius: 8, padding: '10px 12px' }}>
@@ -137,28 +166,30 @@ export function ApplicationLine({
               <ShuffleText
                 text={
                   action.label?.display_value.text ||
-                  (contractAddress ? truncateAddress(contractAddress, 4) : '')
+                  (applicationAddress
+                    ? truncateAddress(applicationAddress, 4)
+                    : '')
                 }
               />
             </UIText>
-            {contractAddress ? (
+            {applicationAddress ? (
               <UIText
                 kind="small/regular"
                 color="var(--neutral-500)"
-                title={contractAddress}
+                title={applicationAddress}
               >
                 <TextAnchor
                   // Open URL in a new _window_ so that extension UI stays open and visible
                   onClick={openInNewWindow}
                   href={networks.getExplorerAddressUrlByName(
                     chain,
-                    contractAddress
+                    applicationAddress
                   )}
                   target="_blank"
                   rel="noopener noreferrer"
                 >
                   <HStack gap={3} justifyContent="center" alignItems="center">
-                    <span>{truncateAddress(contractAddress, 4)}</span>
+                    <span>{truncateAddress(applicationAddress, 4)}</span>
                     <ArrowLeftTop />
                   </HStack>
                 </TextAnchor>

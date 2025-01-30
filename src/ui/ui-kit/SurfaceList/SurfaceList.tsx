@@ -13,18 +13,21 @@ export function ItemLink({
   onClick,
   children,
   style,
+  className,
+  ...props
 }: {
   to: LinkProps['to'];
   children: React.ReactNode;
   onClick?: React.AnchorHTMLAttributes<HTMLAnchorElement>['onClick'];
-  style?: React.CSSProperties;
-}) {
+  className?: React.AnchorHTMLAttributes<HTMLAnchorElement>['className'];
+} & React.AnchorHTMLAttributes<HTMLAnchorElement>) {
   return (
     <UnstyledLink
+      {...props}
       style={{ color: 'inherit', ...style }}
       to={to}
       onClick={onClick}
-      className={s.option}
+      className={cn(s.option, className)}
     >
       <div className={s.decoration}>{children}</div>
     </UnstyledLink>
@@ -101,6 +104,7 @@ export const ItemButton = React.forwardRef<
           className={s.decoration}
           style={{
             border: outlined ? '1px solid var(--primary)' : undefined,
+            paddingBlock: 7,
             ...decorationStyle,
           }}
         >
@@ -181,7 +185,7 @@ export const SurfaceList = React.forwardRef(
         }}
         {...props}
       >
-        <VStack gap={gap}>
+        <VStack gap={gap} style={{ height: style?.height }}>
           {items.map((item, index) => {
             const {
               style,
@@ -237,7 +241,7 @@ export const SurfaceList = React.forwardRef(
                 // not sure if this looks good yet. Seems too thick
                 // className={noSeparator ? s.noSeparator : undefined}
                 style={{
-                  padding: isInteractiveItem ? undefined : `0 16px`,
+                  padding: isInteractiveItem ? undefined : '0 16px',
                   ...style,
                 }}
               >

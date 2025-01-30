@@ -1,8 +1,11 @@
 import { valueToHex } from 'src/shared/units/valueToHex';
-import type { UnsignedTransaction } from '../types/UnsignedTransaction';
-import type { IncomingTransaction } from '../types/IncomingTransaction';
+import type {
+  IncomingTransaction,
+  IncomingTransactionAA,
+  SerializableTransactionRequest,
+} from '../types/IncomingTransaction';
 
-const knownFields: Array<keyof UnsignedTransaction> = [
+const knownFields: Array<keyof IncomingTransaction> = [
   'from',
   'to',
   'nonce',
@@ -15,14 +18,15 @@ const knownFields: Array<keyof UnsignedTransaction> = [
   'gasPrice',
   'maxPriorityFeePerGas',
   'maxFeePerGas',
+  'customData',
+  'maxFeePerBlobGas',
 ];
 
-export function prepareTransaction(incomingTransaction: IncomingTransaction) {
-  const transaction: UnsignedTransaction = {};
+export function prepareTransaction(incomingTransaction: IncomingTransactionAA) {
+  const transaction: SerializableTransactionRequest = {};
   for (const field of knownFields) {
-    const knownField = field as keyof UnsignedTransaction;
+    const knownField = field as keyof IncomingTransactionAA;
     if (incomingTransaction[knownField] !== undefined) {
-      // TODO: convert using `valueToHex` each value?
       // @ts-ignore
       transaction[knownField] = incomingTransaction[knownField];
     }

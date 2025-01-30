@@ -21,7 +21,8 @@ import { DelayedRender } from 'src/ui/components/DelayedRender';
 import { ViewLoading } from 'src/ui/components/ViewLoading';
 import { Spacer } from 'src/ui/ui-kit/Spacer';
 import { CenteredFillViewportView } from 'src/ui/components/FillView/FillView';
-import { GROWN_TAB_MAX_HEIGHT } from '../Overview/getTabsOffset';
+import { useStore } from '@store-unit/react';
+import { getGrownTabMaxHeight, offsetValues } from '../Overview/getTabsOffset';
 import { useWalletAbilities } from './daylight';
 import type { StatusFilterParams } from './daylight';
 import { Ability } from './Ability/Ability';
@@ -38,7 +39,7 @@ const STATUS_TO_TITLE: Record<FeedStatus, string> = {
   open: 'Open',
   completed: 'Completed',
   expired: 'Expired',
-  dismissed: 'Dissmised',
+  dismissed: 'Dismissed',
 };
 
 const STATUS_ITEMS: FeedStatus[] = [
@@ -472,11 +473,14 @@ export function Feed() {
     </HStack>
   );
 
+  const offsetValuesState = useStore(offsetValues);
   if (!abilities?.length) {
     return (
-      <CenteredFillViewportView maxHeight={GROWN_TAB_MAX_HEIGHT}>
+      <CenteredFillViewportView
+        maxHeight={getGrownTabMaxHeight(offsetValuesState)}
+      >
         <div style={{ position: 'absolute', left: 0 }}>{feedFilters}</div>
-        {fetching ? <ViewLoading /> : <EmptyView text="No perks yet" />}
+        {fetching ? <ViewLoading /> : <EmptyView>No perks yet</EmptyView>}
       </CenteredFillViewportView>
     );
   }

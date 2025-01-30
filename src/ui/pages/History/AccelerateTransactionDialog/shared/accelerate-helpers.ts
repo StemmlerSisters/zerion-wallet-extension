@@ -1,12 +1,12 @@
 import { produce } from 'immer';
-import type { BigNumberish, BytesLike } from 'ethers';
-import { BigNumber } from 'ethers';
+import type { BigNumberish } from 'ethers';
+import { BigNumber } from '@ethersproject/bignumber';
 import omit from 'lodash/omit';
 import {
   isLocalAddressAction,
   type AnyAddressAction,
 } from 'src/modules/ethereum/transactions/addressAction';
-import type { ChainGasPrice } from 'src/modules/ethereum/transactions/gasPrices/requests';
+import type { ChainGasPrice } from 'src/modules/ethereum/transactions/gasPrices/types';
 import type { TransactionObject } from 'src/modules/ethereum/transactions/types';
 import type { IncomingTransaction } from 'src/modules/ethereum/types/IncomingTransaction';
 import { valueToHex } from 'src/shared/units/valueToHex';
@@ -17,10 +17,10 @@ export function fromAddressActionTransaction(
     | TransactionObject['transaction']
     | AnyAddressAction['transaction']
   ) & {
-    gasLimit?: BigNumber;
-    gasPrice?: BigNumber;
-    maxFeePerGas?: BigNumber;
-    maxPriorityFeePerGas?: BigNumber;
+    gasLimit?: BigNumberish;
+    gasPrice?: BigNumberish;
+    maxFeePerGas?: BigNumberish;
+    maxPriorityFeePerGas?: BigNumberish;
     value?: BigNumberish;
   }
 ) {
@@ -43,6 +43,8 @@ export function fromAddressActionTransaction(
     const key = untypedKey as keyof typeof tx;
     const value = tx[key];
     if (BigNumber.isBigNumber(value)) {
+      // TODO: Refactor to BigInt,
+      // NOTE: handle cases for { "_hex": "0x06a11e3d", "_isBigNumber": true }
       // @ts-ignore
       tx[key] = BigNumber.from(value).toHexString();
     }
@@ -65,18 +67,13 @@ export function increaseGasPrices(
     return null;
   }
   return produce(chainGasPrices, (draft) => {
-    if (draft.info.classic) {
-      const { fast } = draft.info.classic;
-      draft.info.classic.fast = increase(fast, 1.1);
+    if (draft.fast.classic) {
+      draft.fast.classic = increase(draft.fast.classic, 1.1);
     }
-    if (draft.info.eip1559?.fast) {
-      const { max_fee, priority_fee } = draft.info.eip1559.fast;
-      draft.info.eip1559.fast.max_fee = increase(max_fee, 1.1);
-      draft.info.eip1559.fast.priority_fee = increase(priority_fee, 1.3);
-    }
-    if (draft.info.optimistic?.l2) {
-      const { l2 } = draft.info.optimistic;
-      draft.info.optimistic.l2 = increase(l2, 1.1);
+    if (draft.fast.eip1559) {
+      const { maxFee, priorityFee } = draft.fast.eip1559;
+      draft.fast.eip1559.maxFee = increase(maxFee, 1.1);
+      draft.fast.eip1559.priorityFee = increase(priorityFee, 1.1);
     }
   });
 }
@@ -93,13 +90,11 @@ export function createCancelTransaction({
   return { from, to: from, value: valueToHex(0), chainId, data: '0x', nonce };
 }
 
-function restoreValue(value: BigNumberish | BytesLike) {
+function restoreValue(value: BigNumberish) {
   if (value === '0x') {
     return '0x0';
   }
-  return BigNumber.isBigNumber(value)
-    ? BigNumber.from(value).toHexString()
-    : valueToHex(value);
+  return valueToHex(value);
 }
 
 export function isCancelTx(addressAction: AnyAddressAction) {
@@ -113,6 +108,9 @@ export function isCancelTx(addressAction: AnyAddressAction) {
       return true;
     }
     if (value && data) {
+      // TODO:
+      // This logic falsely counts mint transaction on https://docs.zero.network/build-on-zero/claim-docs
+      // as "cancel". This isn't critical currently as it only affects some UI labels, and doesn't affect functionality
       return (
         Number(restoreValue(value)) === 0 && Number(restoreValue(data)) === 0
       );

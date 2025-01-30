@@ -6,6 +6,7 @@
 
 .button:disabled {
   cursor: default;
+  background-color: var(--button-disabled-background, var(--button-background));
 }
 
 .asButton {
@@ -76,7 +77,19 @@
 
 .danger:disabled {
   cursor: default;
-  background-color: var(--negative-300);
+  --button-disabled-background: var(--negative-300);
+}
+
+.warning.warning {
+  --button-background: var(--notice-100);
+  --button-text: var(--notice-500);
+  --button-text-hover: var(--notice-600);
+  --button-background-hover: var(--notice-200);
+}
+
+.warning:disabled {
+  cursor: default;
+  --button-disabled-background: var(--notice-300);
 }
 
 .text-primary {

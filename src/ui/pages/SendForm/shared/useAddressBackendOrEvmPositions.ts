@@ -1,8 +1,10 @@
 import type { AddressPosition } from 'defi-sdk';
-import { useAddressPositions } from 'defi-sdk';
 import type { Chain } from 'src/modules/networks/Chain';
 import { useNetworks } from 'src/modules/networks/useNetworks';
+import { useHttpClientSource } from 'src/modules/zerion-api/hooks/useHttpClientSource';
+import { useHttpAddressPositions } from 'src/modules/zerion-api/hooks/useWalletPositions';
 import { useEvmAddressPositions } from 'src/ui/shared/requests/useEvmAddressPositions';
+import { usePositionsRefetchInterval } from 'src/ui/transactions/usePositionsRefetchInterval';
 
 export function useAddressBackendOrEvmPositions({
   address,
@@ -14,15 +16,18 @@ export function useAddressBackendOrEvmPositions({
   chain: Chain | null;
 }): { data: AddressPosition[] | null | undefined; isLoading: boolean } {
   const { networks } = useNetworks();
-  const isSupportedByBackend = !chain // backend address positions are returned for all supported chains
-    ? true
-    : networks
-    ? networks.isSupportedByBackend(chain)
-    : null;
-  const { value: positionsValue, isLoading } = useAddressPositions(
-    { address, currency },
-    { enabled: isSupportedByBackend != null && isSupportedByBackend }
+  const isSupportedByBackend =
+    chain && networks ? networks.supports('positions', chain) : null;
+  const { data, isLoading } = useHttpAddressPositions(
+    { addresses: [address], currency },
+    { source: useHttpClientSource() },
+    {
+      // we query positions for all chains, so we can do it even before the "supported" check is ready
+      enabled: isSupportedByBackend == null || isSupportedByBackend,
+      refetchInterval: usePositionsRefetchInterval(20000),
+    }
   );
+  const addressPositions = data?.data;
 
   const evmQuery = useEvmAddressPositions({
     address,
@@ -31,7 +36,7 @@ export function useAddressBackendOrEvmPositions({
     enabled: isSupportedByBackend != null && !isSupportedByBackend,
   });
 
-  return isSupportedByBackend
-    ? { data: positionsValue?.positions, isLoading }
+  return isSupportedByBackend || isSupportedByBackend == null
+    ? { data: addressPositions, isLoading }
     : { data: evmQuery.data, isLoading: evmQuery.isLoading };
 }
