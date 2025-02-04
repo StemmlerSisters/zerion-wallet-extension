@@ -2,13 +2,18 @@ import { prepareStorage } from 'src/shared/core/version';
 import { DnaService } from 'src/modules/dna-service/dna.background';
 import { initialize as initializeAnalytics } from 'src/shared/analytics/analytics.background';
 import { initialize as initializeRemoteConfig } from 'src/modules/remote-config';
+import { referralProgramService } from 'src/ui/features/referral-program/ReferralProgramService.background';
+import { initialize as initializeLiteweightChainSupport } from './requests/liteweight-chain-support';
+import { InDappNotificationService } from './in-dapp-notifications';
 import { Account, AccountPublicRPC } from './account/Account';
-import { TransactionService } from './transactions/TransactionService';
-import { GlobalPreferences } from './Wallet/GlobalPreferences';
+import { transactionService } from './transactions/TransactionService';
+import { globalPreferences } from './Wallet/GlobalPreferences';
 import { NotificationWindow } from './NotificationWindow/NotificationWindow';
 import { setUninstallURL } from './uninstall';
 
 let didInitialize = false;
+
+export const ServiceLocator: { account?: Account } = {};
 
 export async function initialize() {
   if (didInitialize) {
@@ -23,21 +28,33 @@ export async function initialize() {
   // or that the browser decided to "restart" the background scripts
   // Either way, we either create a user from scratch or find one in storage
   await Account.ensureUserAndWallet();
-  const globalPreferences = new GlobalPreferences({}, 'globalPreferences');
+
   const notificationWindow = new NotificationWindow();
   await notificationWindow.initialize();
-  const account = new Account({ globalPreferences, notificationWindow });
+  const account = new Account({ notificationWindow });
   await account.initialize();
   const accountPublicRPC = new AccountPublicRPC(account);
-  const transactionService = new TransactionService();
-  const dnaService = new DnaService(account);
-  dnaService.initialize();
-  await transactionService.initialize();
+  const dnaService = new DnaService({
+    getWallet: () => account.getCurrentWallet(),
+  });
+  referralProgramService.initialize({
+    getWallet: () => account.getCurrentWallet(),
+  });
+  dnaService.initialize({ account });
+  await transactionService.initialize({
+    getWallet: () => account.getCurrentWallet(),
+  });
   initializeRemoteConfig().then(() => {
     globalPreferences.initialize();
     setUninstallURL();
   });
   initializeAnalytics({ account });
+  initializeLiteweightChainSupport(account);
+
+  const inDappNotificationService = new InDappNotificationService({
+    getWallet: () => account.getCurrentWallet(),
+  });
+  inDappNotificationService.initialize();
 
   Object.assign(globalThis, {
     account,
@@ -45,15 +62,16 @@ export async function initialize() {
     accountPublicRPC,
     dnaService,
     transactionService,
+    referralProgramService,
     globalPreferences,
     notificationWindow,
   });
+  ServiceLocator.account = account;
   return {
     account,
     accountPublicRPC,
     transactionService,
     dnaService,
-    globalPreferences,
     notificationWindow,
   };
 }

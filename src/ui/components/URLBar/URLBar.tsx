@@ -31,11 +31,14 @@ const URLBarBlacklist = new Set([
   '/overview/feed',
   '/login',
   '/addEthereumChain',
+  '/switchEthereumChain',
   '/sendTransaction',
   '/signMessage',
   '/signTypedData',
   '/siwe',
+  '/invite',
   '/requestAccounts',
+  '/testnetModeGuard',
   '/phishing-warning',
 ]);
 
@@ -102,7 +105,7 @@ export function URLBar() {
             <>
               <BackButton
                 onClick={() => navigate(getBackOrHome() as number)}
-                title={`Press "backspace" to navigate back`}
+                title={'Press "backspace" to navigate back'}
               />
               <KeyboardShortcut
                 combination="backspace"

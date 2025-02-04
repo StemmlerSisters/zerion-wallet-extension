@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { PageColumn } from 'src/ui/components/PageColumn';
@@ -12,23 +12,21 @@ import { Surface } from 'src/ui/ui-kit/Surface';
 import { Background } from 'src/ui/components/Background';
 import { PageStickyFooter } from 'src/ui/components/PageStickyFooter';
 import { toUtf8String } from 'src/modules/ethereum/message-signing/toUtf8String';
-import { getError } from 'src/shared/errors/getError';
 import { invariant } from 'src/shared/invariant';
 import { TextAnchor } from 'src/ui/ui-kit/TextAnchor';
 import { HStack } from 'src/ui/ui-kit/HStack';
 import { WalletDisplayName } from 'src/ui/components/WalletDisplayName';
 import { WalletAvatar } from 'src/ui/components/WalletAvatar';
-import { KeyboardShortcut } from 'src/ui/components/KeyboardShortcut';
-import { usePersonalSignMutation } from 'src/ui/shared/requests/message-signing';
 import { prepareForHref } from 'src/ui/shared/prepareForHref';
 import { focusNode } from 'src/ui/shared/focusNode';
 import { PhishingDefenceStatus } from 'src/ui/components/PhishingDefence/PhishingDefenceStatus';
 import type { ExternallyOwnedAccount } from 'src/shared/types/ExternallyOwnedAccount';
-import { isDeviceAccount } from 'src/shared/types/validators';
-import { useErrorBoundary } from 'src/ui/shared/useErrorBoundary';
 import { NavigationTitle } from 'src/ui/components/NavigationTitle';
 import { INTERNAL_ORIGIN } from 'src/background/constants';
-import { HardwareSignMessage } from '../HardwareWalletConnection/HardwareSignMessage';
+import type { SignMsgBtnHandle } from 'src/ui/components/SignMessageButton';
+import { SignMessageButton } from 'src/ui/components/SignMessageButton';
+import { usePreferences } from 'src/ui/features/preferences';
+import { wait } from 'src/shared/wait';
 import { txErrorToMessage } from '../SendTransaction/shared/transactionErrorToMessage';
 
 function MessageRow({ message }: { message: string }) {
@@ -40,7 +38,7 @@ function MessageRow({ message }: { message: string }) {
       <Surface padding={16} style={{ border: '1px solid var(--neutral-300)' }}>
         <UIText
           kind="small/regular"
-          style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+          style={{ whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }}
         >
           {toUtf8String(message)}
         </UIText>
@@ -52,41 +50,50 @@ function MessageRow({ message }: { message: string }) {
 function SignMessageContent({
   message,
   origin,
+  clientScope: clientScopeParam,
   wallet,
 }: {
   message: string;
   origin: string;
+  clientScope: string | null;
   wallet: ExternallyOwnedAccount;
 }) {
   const [params] = useSearchParams();
   const windowId = params.get('windowId');
+  const { preferences } = usePreferences();
   invariant(windowId, 'windowId get-parameter is required');
   const handleSignSuccess = (signature: string) =>
     windowPort.confirm(windowId, signature);
 
-  const { mutate: registerSignedMessage } = useMutation({
-    mutationFn: async (signature: string) => {
-      walletPort.request('registerPersonalSign', {
-        message,
-        address: wallet.address,
+  const clientScope = clientScopeParam || 'External Dapp';
+
+  const signMsgBtnRef = useRef<SignMsgBtnHandle | null>(null);
+
+  const { mutate: personalSign, ...personalSignMutation } = useMutation({
+    mutationFn: async () => {
+      invariant(signMsgBtnRef.current, 'SignMessageButton not found');
+      return signMsgBtnRef.current.personalSign({
+        params: [message],
         initiator: origin,
+        clientScope,
       });
+    },
+    // The value returned by onMutate can be accessed in
+    // a global onError handler (src/ui/shared/requests/queryClient.ts)
+    // TODO: refactor to just emit error directly from the mutationFn
+    onMutate: () => 'signMessage',
+    onSuccess: async (signature) => {
+      if (preferences?.enableHoldToSignButton) {
+        // small delay to show success state to the user before closing the popup
+        await wait(500);
+      }
       handleSignSuccess(signature);
     },
-  });
-
-  const personalSignMutation = usePersonalSignMutation({
-    onSuccess: handleSignSuccess,
   });
 
   const originForHref = useMemo(() => prepareForHref(origin), [origin]);
 
   const handleReject = () => windowPort.reject(windowId);
-
-  const showErrorBoundary = useErrorBoundary();
-  const [hardwareSignError, setHardwareSignError] = useState<Error | null>(
-    null
-  );
 
   return (
     <Background backgroundKind="white">
@@ -134,7 +141,7 @@ function SignMessageContent({
         <Spacer height={24} />
         <MessageRow message={message} />
         <Spacer height={16} />
-        <PhishingDefenceStatus origin={origin} />
+        <PhishingDefenceStatus origin={origin} type="dapp" />
       </PageColumn>
       <PageStickyFooter>
         <Spacer height={16} />
@@ -149,11 +156,7 @@ function SignMessageContent({
         >
           {personalSignMutation.isError ? (
             <UIText kind="caption/regular" color="var(--negative-500)">
-              {getError(personalSignMutation.error).message}
-            </UIText>
-          ) : hardwareSignError ? (
-            <UIText kind="caption/regular" color="var(--negative-500)">
-              {txErrorToMessage(hardwareSignError)}
+              {txErrorToMessage(personalSignMutation.error)}
             </UIText>
           ) : null}
 
@@ -172,39 +175,17 @@ function SignMessageContent({
             >
               Cancel
             </Button>
-            {isDeviceAccount(wallet) ? (
-              <HardwareSignMessage
-                derivationPath={wallet.derivationPath}
-                message={message}
-                type="personalSign"
-                isSigning={personalSignMutation.isLoading}
-                onBeforeSign={() => setHardwareSignError(null)}
-                onSignError={(error) => setHardwareSignError(error)}
-                onSign={(signature) => {
-                  try {
-                    registerSignedMessage(signature);
-                  } catch (error) {
-                    showErrorBoundary(error);
-                  }
-                }}
+            {preferences ? (
+              <SignMessageButton
+                ref={signMsgBtnRef}
+                wallet={wallet}
+                onClick={() => personalSign()}
+                holdToSign={preferences.enableHoldToSignButton}
               />
-            ) : (
-              <Button
-                disabled={personalSignMutation.isLoading}
-                onClick={() => {
-                  personalSignMutation.mutate({
-                    params: [message],
-                    initiator: origin,
-                  });
-                }}
-              >
-                {personalSignMutation.isLoading ? 'Signing...' : 'Sign'}
-              </Button>
-            )}
+            ) : null}
           </div>
         </VStack>
       </PageStickyFooter>
-      <KeyboardShortcut combination="esc" onKeyDown={handleReject} />
     </Background>
   );
 }
@@ -219,15 +200,17 @@ export function SignMessage() {
   if (isLoading || !wallet) {
     return null;
   }
+  const clientScope = params.get('clientScope');
   const origin = params.get('origin');
-  if (!origin) {
-    throw new Error('origin get-parameter is required for this view');
-  }
   const message = params.get('message');
-  if (!message) {
-    throw new Error('message get-parameter is required for this view');
-  }
+  invariant(origin, 'origin get-parameter is required for this view');
+  invariant(message, 'message get-parameter is required for this view');
   return (
-    <SignMessageContent message={message} origin={origin} wallet={wallet} />
+    <SignMessageContent
+      message={message}
+      origin={origin}
+      clientScope={clientScope}
+      wallet={wallet}
+    />
   );
 }

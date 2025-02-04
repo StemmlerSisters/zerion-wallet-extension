@@ -1,4 +1,4 @@
-import type { ActionAsset, ActionTransfer } from 'defi-sdk';
+import type { ActionAsset, ActionTransfer, ActionType } from 'defi-sdk';
 import React, { useMemo } from 'react';
 import {
   getFungibleAsset,
@@ -21,24 +21,24 @@ import { UnstyledAnchor } from 'src/ui/ui-kit/UnstyledAnchor';
 import { NetworkId } from 'src/modules/networks/NetworkId';
 import * as helperStyles from 'src/ui/style/helpers.module.css';
 import { AssetLink } from 'src/ui/components/AssetLink';
+import { useCurrency } from 'src/modules/currency/useCurrency';
 import { isUnlimitedApproval } from '../../isUnlimitedApproval';
 
 type Direction = 'incoming' | 'outgoing';
 const ICON_SIZE = 36;
 
 export function ApprovalInfo({
-  approvalInfo,
+  singleTransfer,
+  actionType,
   address,
   chain,
 }: {
-  approvalInfo: {
-    asset: ActionAsset;
-    quantity: string;
-  };
+  singleTransfer: { asset: ActionAsset; quantity: string };
+  actionType: ActionType;
   address?: string;
   chain: Chain;
 }) {
-  const fungible = getFungibleAsset(approvalInfo.asset);
+  const fungible = getFungibleAsset(singleTransfer.asset);
 
   const tokenQuantity = useMemo(
     () =>
@@ -46,17 +46,17 @@ export function ApprovalInfo({
         ? getCommonQuantity({
             asset: fungible,
             chain,
-            baseQuantity: approvalInfo.quantity,
+            baseQuantity: singleTransfer.quantity,
           })
         : null,
-    [approvalInfo, fungible, chain]
+    [singleTransfer, fungible, chain]
   );
 
   if (!fungible) {
     return null;
   }
 
-  const isUnlimited = isUnlimitedApproval(approvalInfo.quantity);
+  const isUnlimited = isUnlimitedApproval(singleTransfer.quantity);
 
   return (
     <Surface padding={12}>
@@ -84,8 +84,20 @@ export function ApprovalInfo({
           </UIText>
         }
         detailText={
-          tokenQuantity ? (
-            <UIText kind="small/regular" color="var(--neutral-500)">
+          actionType === 'revoke' && singleTransfer.quantity === '0' ? (
+            <UIText
+              kind="small/regular"
+              color="var(--neutral-500)"
+              style={{ overflowWrap: 'break-word' }}
+            >
+              {fungible.symbol || null}
+            </UIText>
+          ) : tokenQuantity ? (
+            <UIText
+              kind="small/regular"
+              color="var(--neutral-500)"
+              style={{ overflowWrap: 'break-word' }}
+            >
               {isUnlimited
                 ? 'Unlimited'
                 : formatTokenValue(tokenQuantity, fungible.symbol)}
@@ -108,6 +120,7 @@ function FungibleTransfer({
   direction: Direction;
   chain: Chain;
 }) {
+  const { currency } = useCurrency();
   const fungible = getFungibleAsset(transfer.asset);
   invariant(fungible, 'Transfer with fungible asset should contain one');
   const balance = useMemo(
@@ -161,7 +174,11 @@ function FungibleTransfer({
       detailText={
         <UIText kind="small/regular" color="var(--neutral-500)">
           {almostEqual}
-          {formatCurrencyValue(balance.times(transfer.price || 0), 'en', 'usd')}
+          {formatCurrencyValue(
+            balance.times(transfer.price || 0),
+            'en',
+            currency
+          )}
         </UIText>
       }
     />

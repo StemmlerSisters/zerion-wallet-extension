@@ -1,4 +1,4 @@
-import type { ActionAsset, AddressAction } from 'defi-sdk';
+import type { ActionAsset } from 'defi-sdk';
 import { isTruthy } from 'is-truthy-ts';
 import { getFungibleAsset } from 'src/modules/ethereum/transactions/actionAsset';
 import type { AnyAddressAction } from 'src/modules/ethereum/transactions/addressAction';
@@ -9,7 +9,7 @@ import type { Quote } from 'src/shared/types/Quote';
 import { baseToCommon } from 'src/shared/units/convert';
 
 interface AnalyticsTransactionData {
-  type: string;
+  action_type: string;
   usd_amount_sent: number | null;
   usd_amount_received: number | null;
   asset_amount_sent?: (string | null)[];
@@ -20,6 +20,7 @@ interface AnalyticsTransactionData {
   asset_address_received?: string[];
   zerion_fee_percentage?: number;
   zerion_fee_usd_amount?: number;
+  output_chain?: string;
 }
 
 interface AssetQuantity {
@@ -68,14 +69,14 @@ function getAssetName({ asset }: { asset: ActionAsset }) {
   return getFungibleAsset(asset)?.name;
 }
 
+function getAssetAddress({ asset }: { asset: ActionAsset }) {
+  return getFungibleAsset(asset)?.asset_code;
+}
+
 function toMaybeArr<T>(
   arr: (T | null | undefined)[] | null | undefined
 ): T[] | undefined {
   return arr?.length ? arr.filter(isTruthy) : undefined;
-}
-
-function actionTypeToAnalytics(type: AddressAction['type']) {
-  return type.value === 'trade' ? 'Swap' : type.display_value;
 }
 
 export function addressActionToAnalytics({
@@ -96,24 +97,32 @@ export function addressActionToAnalytics({
   const incoming = addressAction.content?.transfers?.incoming;
 
   const value = {
-    type: actionTypeToAnalytics(addressAction.type),
+    action_type: addressAction.type.display_value,
     usd_amount_sent: outgoing?.reduce(addAssetPrice, 0) ?? null,
     usd_amount_received: incoming?.reduce(addAssetPrice, 0) ?? null,
     asset_amount_sent: toMaybeArr(outgoing?.map(convertQuantity)),
     asset_amount_received: toMaybeArr(incoming?.map(convertQuantity)),
     asset_name_sent: toMaybeArr(outgoing?.map(getAssetName)),
     asset_name_received: toMaybeArr(incoming?.map(getAssetName)),
+    asset_address_sent: toMaybeArr(outgoing?.map(getAssetAddress)),
+    asset_address_received: toMaybeArr(incoming?.map(getAssetAddress)),
   };
   if (quote) {
     const zerion_fee_percentage = quote.protocol_fee;
     const feeAmount = quote.protocol_fee_amount;
     const asset = incoming?.[0]?.asset;
+    const output_chain = quote.output_chain;
     const zerion_fee_usd_amount =
       feeAmount && asset
         ? assetQuantityToValue({ quantity: feeAmount, asset }, chain)
         : undefined;
 
-    return { ...value, zerion_fee_percentage, zerion_fee_usd_amount };
+    return {
+      ...value,
+      zerion_fee_percentage,
+      zerion_fee_usd_amount,
+      output_chain,
+    };
   } else {
     return value;
   }

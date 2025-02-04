@@ -1,7 +1,7 @@
 import { isTruthy } from 'is-truthy-ts';
 import React, { useRef } from 'react';
-import type { ChainGasPrice } from 'src/modules/ethereum/transactions/gasPrices/requests';
-import { formatCurrencyValue } from 'src/shared/units/formatCurrencyValue';
+import type { NetworkFeeConfiguration } from '@zeriontech/transactions';
+import type { ChainGasPrice } from 'src/modules/ethereum/transactions/gasPrices/types';
 import { CircleSpinner } from 'src/ui/ui-kit/CircleSpinner';
 import { HStack } from 'src/ui/ui-kit/HStack';
 import { UIText } from 'src/ui/ui-kit/UIText';
@@ -13,12 +13,15 @@ import type { HTMLDialogElementInterface } from 'src/ui/ui-kit/ModalDialogs/HTML
 import type { Chain } from 'src/modules/networks/Chain';
 import type { IncomingTransactionWithFrom } from 'src/modules/ethereum/types/IncomingTransaction';
 import { useNetworks } from 'src/modules/networks/useNetworks';
+import { useCurrency } from 'src/modules/currency/useCurrency';
+import { formatCurrencyValueExtra } from 'src/shared/units/formatCurrencyValue';
 import type { TransactionFee } from '../TransactionConfiguration/useTransactionFee';
 import { NetworkFeeDialog } from './NetworkFeeDialog';
-import type { NetworkFeeConfiguration } from './types';
 import { NETWORK_SPEED_TO_TITLE } from './constants';
 
-function getFeeTypeTitle(type: keyof ChainGasPrice['info'] | undefined) {
+function getFeeTypeTitle(
+  type: Exclude<keyof ChainGasPrice['fast'], 'eta'> | undefined
+) {
   if (!type) {
     return undefined;
   }
@@ -39,6 +42,7 @@ export function NetworkFee({
   onChange,
   label,
   renderDisplayValue,
+  displayValueEnd,
 }: {
   transaction: IncomingTransactionWithFrom;
   transactionFee: TransactionFee;
@@ -52,8 +56,10 @@ export function NetworkFee({
     hintTitle: string;
     displayValue: string;
   }) => React.ReactNode;
+  displayValueEnd?: React.ReactNode;
 }) {
   const { networks } = useNetworks();
+  const { currency } = useCurrency();
   const dialogRef = useRef<HTMLDialogElementInterface | null>(null);
   const { time, feeEstimation, feeEstimationQuery, costs, costsQuery } =
     transactionFee;
@@ -70,12 +76,13 @@ export function NetworkFee({
   const nativeAssetSymbol =
     networks?.getNetworkByName(chain)?.native_asset?.symbol;
 
-  const isOptimistic = feeEstimation?.type === 'optimistic';
-  const disabled = isLoading || isOptimistic || !onChange;
+  const disabled = isLoading || !onChange;
 
   const feeValuePrefix = totalValueExceedsBalance ? 'Up to ' : '';
   const feeValueFormatted = feeValueFiat
-    ? formatCurrencyValue(feeValueFiat, 'en', 'usd')
+    ? formatCurrencyValueExtra(feeValueFiat, 'en', currency, {
+        zeroRoundingFallback: 0.01,
+      })
     : feeValueCommon
     ? formatTokenValue(feeValueCommon.toString(), nativeAssetSymbol)
     : undefined;
@@ -115,6 +122,8 @@ export function NetworkFee({
           value={networkFeeConfiguration}
           onSubmit={(value) => {
             onChange(value);
+          }}
+          onDismiss={() => {
             dialogRef.current?.close();
           }}
           chain={chain}
@@ -127,33 +136,35 @@ export function NetworkFee({
         {label !== undefined ? (
           label
         ) : (
-          <UIText kind="small/regular" color="var(--neutral-700)">
-            Network Fee
-          </UIText>
+          <UIText kind="small/regular">Network Fee</UIText>
         )}
         {isLoading ? (
           <CircleSpinner />
         ) : displayValue ? (
-          <HStack gap={12} alignItems="center">
-            {feeEstimationQuery.isPreviousData ? <CircleSpinner /> : null}
-            <UnstyledButton
-              type="button"
-              className={disabled ? undefined : helperStyles.hoverUnderline}
-              style={{
-                color: disabled ? 'var(--black)' : 'var(--primary)',
-                cursor: isOptimistic || !onChange ? 'auto' : undefined,
-              }}
-              onClick={() => {
-                dialogRef.current?.showModal();
-              }}
-              disabled={disabled}
-            >
-              {renderDisplayValue?.({ hintTitle, displayValue }) ?? (
-                <UIText kind="small/accent" title={hintTitle}>
-                  {displayValue}
-                </UIText>
-              )}
-            </UnstyledButton>
+          <HStack gap={0} alignItems="center">
+            <HStack gap={12} alignItems="center">
+              {feeEstimationQuery.isPreviousData ? <CircleSpinner /> : null}
+              <UnstyledButton
+                type="button"
+                className={disabled ? undefined : helperStyles.hoverUnderline}
+                style={{
+                  color: disabled ? 'var(--black)' : 'var(--primary)',
+                  cursor: !onChange ? 'auto' : undefined,
+                }}
+                onClick={() => {
+                  dialogRef.current?.showModal();
+                }}
+                disabled={disabled}
+              >
+                {renderDisplayValue?.({ hintTitle, displayValue }) ?? (
+                  <UIText kind="small/accent" title={hintTitle}>
+                    {displayValue}
+                    {displayValueEnd ? ' · ' : null}
+                  </UIText>
+                )}
+              </UnstyledButton>
+            </HStack>
+            {displayValueEnd}
           </HStack>
         ) : feeEstimationQuery.isSuccess ? (
           <UIText kind="small/regular" title="No fee data">

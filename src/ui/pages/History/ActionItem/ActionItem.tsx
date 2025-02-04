@@ -33,8 +33,8 @@ import { CenteredDialog } from 'src/ui/ui-kit/ModalDialogs/CenteredDialog';
 import { prepareForHref } from 'src/ui/shared/prepareForHref';
 import { AssetLink } from 'src/ui/components/AssetLink';
 import { DNA_MINT_CONTRACT_ADDRESS } from 'src/ui/DNA/shared/constants';
-import { Spacer } from 'src/ui/ui-kit/Spacer';
 import { isInteractiveElement } from 'src/ui/shared/isInteractiveElement';
+import { useCurrency } from 'src/modules/currency/useCurrency';
 import { ActionDetailedView } from '../ActionDetailedView';
 import { isUnlimitedApproval } from '../isUnlimitedApproval';
 import { AccelerateTransactionDialog } from '../AccelerateTransactionDialog';
@@ -100,7 +100,7 @@ function ActionTitle({
 function AddressTruncated({ value }: { value: string }) {
   return (
     <span title={value} style={{ whiteSpace: 'nowrap' }}>
-      {truncateAddress(value, 4)}
+      {truncateAddress(value, 5)}
     </span>
   );
 }
@@ -140,7 +140,6 @@ function ActionDetail({
       <NetworkIcon
         size={16}
         src={network?.icon_url}
-        chainId={network?.external_id || ''}
         name={network?.name || null}
       />
       <UIText kind="small/regular" color="var(--neutral-500)">
@@ -161,10 +160,13 @@ function ActionDetail({
 function ActionItemBackend({
   action,
   networks,
+  testnetMode,
 }: {
   action: AddressAction;
   networks: Networks;
+  testnetMode: boolean;
 }) {
+  const { currency } = useCurrency();
   const { params, ready } = useAddressParams();
   const dialogRef = useRef<HTMLDialogElementInterface | null>(null);
 
@@ -181,14 +183,14 @@ function ActionItemBackend({
   }
 
   const address = 'address' in params ? params.address : undefined;
-  const approveTransfers = action.content?.single_asset;
+  const singleTransfer = action.content?.single_asset;
   const incomingTransfers = action.content?.transfers?.incoming;
   const outgoingTransfers = action.content?.transfers?.outgoing;
 
   const shouldUsePositiveColor =
     incomingTransfers?.length === 1 &&
     Boolean(getFungibleAsset(incomingTransfers[0].asset));
-  const maybeApprovedAsset = getFungibleAsset(approveTransfers?.asset);
+  const maybeSingleAsset = getFungibleAsset(singleTransfer?.asset);
   const chain = action.transaction.chain
     ? createChain(action.transaction.chain)
     : null;
@@ -268,30 +270,32 @@ function ActionItemBackend({
               maxWidth: '100%',
             }}
           >
-            {action.type.value === 'approve' && maybeApprovedAsset ? (
+            {maybeSingleAsset ? (
               <AssetLink
-                asset={maybeApprovedAsset}
+                asset={maybeSingleAsset}
                 title={
-                  maybeApprovedAsset.name ||
-                  maybeApprovedAsset.symbol?.toUpperCase()
+                  maybeSingleAsset.name ||
+                  maybeSingleAsset.symbol?.toUpperCase()
                 }
                 address={address}
               />
             ) : incomingTransfers?.length && chain ? (
               <HistoryItemValue
+                actionType={action.type.value}
                 transfers={incomingTransfers}
                 direction="in"
                 chain={chain}
                 address={address}
-                withLink={true}
+                withLink={!testnetMode}
               />
             ) : outgoingTransfers?.length && chain ? (
               <HistoryItemValue
+                actionType={action.type.value}
                 transfers={outgoingTransfers}
                 direction="out"
                 chain={chain}
                 address={address}
-                withLink={true}
+                withLink={!testnetMode}
               />
             ) : null}
           </UIText>
@@ -301,14 +305,17 @@ function ActionItemBackend({
                 <TransactionCurrencyValue
                   transfers={incomingTransfers}
                   chain={chain}
+                  currency={currency}
                 />
               ) : outgoingTransfers?.length && !incomingTransfers?.length ? (
                 <TransactionCurrencyValue
                   transfers={outgoingTransfers}
                   chain={chain}
+                  currency={currency}
                 />
               ) : outgoingTransfers?.length ? (
                 <HistoryItemValue
+                  actionType={action.type.value}
                   transfers={outgoingTransfers}
                   direction="out"
                   chain={chain}
@@ -321,6 +328,7 @@ function ActionItemBackend({
                 'Unlimited'
               ) : action.content?.single_asset?.asset ? (
                 <HistoryItemValue
+                  actionType={action.type.value}
                   transfers={[action.content.single_asset]}
                   direction="self"
                   chain={chain}
@@ -407,7 +415,6 @@ function ActionItemLocal({
           onDismiss={() => dialogRef.current?.close()}
         />
       ) : null}
-      <Spacer height={16} />
       <HStack
         className={isPending ? styles.actionItem : undefined}
         gap={24}
@@ -488,8 +495,10 @@ function ActionItemLocal({
 
 export function ActionItem({
   addressAction,
+  testnetMode,
 }: {
   addressAction: AnyAddressAction;
+  testnetMode: boolean;
 }) {
   const { networks } = useNetworks();
 
@@ -502,6 +511,7 @@ export function ActionItem({
     <ActionItemBackend
       action={addressAction as AddressAction}
       networks={networks}
+      testnetMode={testnetMode}
     />
   );
 }

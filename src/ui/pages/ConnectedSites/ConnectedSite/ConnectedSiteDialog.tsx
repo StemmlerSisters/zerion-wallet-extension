@@ -29,7 +29,7 @@ function ConnectedSitesPageLink() {
       kind="neutral"
       size={48}
       as={UnstyledLink}
-      to={`/connected-sites`}
+      to="/connected-sites"
       onMouseEnter={hoverTrigger}
       className="parent-hover"
       style={{
@@ -91,7 +91,7 @@ export function ConnectedSiteDialog({
   );
 
   if (!connectedSite) {
-    return <EmptyView emoji="🥺" text="Site not found" />;
+    return <EmptyView>Site not found</EmptyView>;
   }
   const title = getNameFromOrigin(connectedSite.origin);
 

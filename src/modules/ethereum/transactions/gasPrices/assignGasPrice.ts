@@ -1,7 +1,6 @@
 import { ethers } from 'ethers';
 import type { IncomingTransaction } from '../../types/IncomingTransaction';
 import type { GasPriceObject } from './GasPriceObject';
-import type { ChainGasPrice } from './requests';
 
 interface EIP1559Props {
   maxFeePerGas: string;
@@ -23,33 +22,36 @@ export function assignGasPrice<
   transaction: T,
   gasPrice: GasPriceObject
 ): T & (ClassicGasPriceProps | EIP1559Props) {
-  if (gasPrice.eip1559) {
-    const { eip1559 } = gasPrice;
+  // Prefer non-zero number for "classic", but prefer zero over nullish:
+  const classicGasPrices =
+    gasPrice.classic ||
+    gasPrice.optimistic?.underlying.classic ||
+    (gasPrice.classic ?? gasPrice.optimistic?.underlying.classic);
+
+  const eip1559GasPrices =
+    gasPrice.eip1559 || gasPrice.optimistic?.underlying.eip1559;
+  if (eip1559GasPrices) {
     delete transaction.gasPrice;
+    const EIP1559_TYPE = 2;
+    if (transaction.type != null && Number(transaction.type) <= EIP1559_TYPE) {
+      // type == 2 is an eip-1559 transaction. Types == 0 and == 1 are "pre-eip-1559"
+      // and do not support eip-1559 gas prices. Removing type prop for eip-1559 and less is safe
+      // because it will be implied by gas prices
+      delete transaction.type;
+    }
     return Object.assign(transaction, {
-      maxFeePerGas: ethers.utils.hexValue(eip1559.max_fee),
-      maxPriorityFeePerGas: ethers.utils.hexValue(eip1559.priority_fee),
+      maxFeePerGas: ethers.toQuantity(eip1559GasPrices.maxFee),
+      maxPriorityFeePerGas: ethers.toQuantity(eip1559GasPrices.priorityFee),
     });
-  } else if (gasPrice.classic != null) {
+  } else if (classicGasPrices != null) {
     delete transaction.maxFeePerGas;
     delete transaction.maxPriorityFeePerGas;
     delete transaction.type;
     return Object.assign(transaction, {
-      gasPrice: ethers.utils.hexValue(gasPrice.classic),
+      gasPrice: ethers.toQuantity(classicGasPrices),
     });
   }
   throw new Error(
     'gasPrice object must include either classic or eip1559 field'
   );
-}
-
-export function assignChainGasPrice<T extends object>(
-  transaction: T,
-  chainGasPrice: ChainGasPrice
-) {
-  const { eip1559, classic } = chainGasPrice.info;
-  return assignGasPrice(transaction, {
-    eip1559: eip1559?.fast,
-    classic: classic?.fast,
-  });
 }

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
-import { payloadId } from '@json-rpc-tools/utils';
+import { payloadId } from '@walletconnect/jsonrpc-utils';
 import { v4 as uuidv4 } from 'uuid';
 import { animated, useSpring } from '@react-spring/web';
 import { invariant } from 'src/shared/invariant';
@@ -69,7 +69,12 @@ export function SelectDna() {
       const backgroundId = VALUE_INDEX[value] + 1;
       const signatureMessage = `Claim Extension Background #${backgroundId} for ${selectedDnaId}\n\n${actionId}`;
       const signature = await walletPort.request('openPersonalSign', {
-        params: [signatureMessage, address, ''],
+        params: [
+          signatureMessage,
+          address,
+          '',
+          { clientScope: 'Zerion DNA Background' },
+        ],
         context: { origin: INTERNAL_ORIGIN },
         id: payloadId(),
       });

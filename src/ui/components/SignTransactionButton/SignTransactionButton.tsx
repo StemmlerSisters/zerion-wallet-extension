@@ -1,33 +1,34 @@
 import { useMutation } from '@tanstack/react-query';
-import type { ethers } from 'ethers';
 import React, { useImperativeHandle, useRef } from 'react';
-import type { AnyAddressAction } from 'src/modules/ethereum/transactions/addressAction';
+import type { SerializableTransactionResponse } from 'src/modules/ethereum/types/TransactionResponsePlain';
 import type { IncomingTransaction } from 'src/modules/ethereum/types/IncomingTransaction';
-import type { Chain } from 'src/modules/networks/Chain';
+import { createChain } from 'src/modules/networks/Chain';
 import { invariant } from 'src/shared/invariant';
 import type { ExternallyOwnedAccount } from 'src/shared/types/ExternallyOwnedAccount';
-import type { Quote } from 'src/shared/types/Quote';
+import type { TransactionContextParams } from 'src/shared/types/SignatureContextParams';
 import { isDeviceAccount } from 'src/shared/types/validators';
 import {
   HardwareSignTransaction,
-  type SignHandle,
+  type SignTransactionHandle,
 } from 'src/ui/pages/HardwareWalletConnection/HardwareSignTransaction';
 import { walletPort } from 'src/ui/shared/channels';
-import { Button } from 'src/ui/ui-kit/Button';
+import {
+  Button,
+  HoldableButton,
+  type Kind as ButtonKind,
+} from 'src/ui/ui-kit/Button';
+import CheckIcon from 'jsx:src/ui/assets/checkmark-checked.svg';
+import { HStack } from 'src/ui/ui-kit/HStack';
+import { WithReadonlyWarningDialog } from './ReadonlyWarningDialog';
 
-interface SendTxParams {
+type SendTxParams = TransactionContextParams & {
   transaction: IncomingTransaction;
-  chain: Chain;
-  feeValueCommon: string | null;
-  initiator: string;
-  addressAction: AnyAddressAction | null;
-  quote?: Quote;
-}
+};
 
-export interface SignerSenderHandle {
+export interface SendTxBtnHandle {
   sendTransaction(
     params: SendTxParams
-  ): Promise<ethers.providers.TransactionResponse>;
+  ): Promise<SerializableTransactionResponse>;
 }
 
 export const SignTransactionButton = React.forwardRef(
@@ -35,13 +36,23 @@ export const SignTransactionButton = React.forwardRef(
     {
       wallet,
       children,
+      buttonTitle,
+      onClick,
+      buttonKind = 'primary',
+      isLoading: isLoadingProp,
+      disabled: disabledAttr,
+      holdToSign,
       ...buttonProps
     }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
       wallet: ExternallyOwnedAccount;
+      buttonTitle?: React.ReactNode;
+      buttonKind?: ButtonKind;
+      isLoading?: boolean;
+      holdToSign: boolean | null;
     },
-    ref: React.Ref<SignerSenderHandle>
+    ref: React.Ref<SendTxBtnHandle>
   ) {
-    const hardwareSignRef = useRef<SignHandle | null>(null);
+    const hardwareSignRef = useRef<SignTransactionHandle | null>(null);
     const { mutateAsync: sendTransaction, ...sendTxMutation } = useMutation({
       mutationFn: async ({ transaction, ...params }: SendTxParams) => {
         if (isDeviceAccount(wallet)) {
@@ -51,13 +62,12 @@ export const SignTransactionButton = React.forwardRef(
           );
           const signedTx = await hardwareSignRef.current.signTransaction({
             transaction,
-            chain: params.chain,
+            chain: createChain(params.chain),
             address: wallet.address,
           });
           return walletPort.request('sendSignedTransaction', {
             serialized: signedTx,
             ...params,
-            chain: params.chain.toString(),
           });
         } else {
           return await walletPort.request('signAndSendTransaction', [
@@ -67,20 +77,78 @@ export const SignTransactionButton = React.forwardRef(
         }
       },
     });
+
     useImperativeHandle(ref, () => ({ sendTransaction }));
+
+    const isLoading = isLoadingProp || sendTxMutation.isLoading;
+    const isSending = sendTxMutation.isLoading;
+
+    // there is a small delay after using a holdable button
+    // button should be disabled after successful sign to prevent a duplicating call
+    const disabled =
+      isLoading || (holdToSign && sendTxMutation.isSuccess) || disabledAttr;
+    const title = buttonTitle || 'Confirm';
 
     return isDeviceAccount(wallet) ? (
       <HardwareSignTransaction
         ref={hardwareSignRef}
         derivationPath={wallet.derivationPath}
-        isSending={sendTxMutation.isLoading}
+        isSending={isSending}
         children={children}
+        buttonTitle={
+          sendTxMutation.isSuccess
+            ? 'Sent'
+            : isLoadingProp
+            ? 'Preparing...'
+            : buttonTitle
+        }
+        buttonKind={buttonKind}
+        onClick={onClick}
+        disabled={disabled}
         {...buttonProps}
       />
     ) : (
-      <Button disabled={sendTxMutation.isLoading} {...buttonProps}>
-        {children || (sendTxMutation.isLoading ? 'Sending...' : 'Confirm')}
-      </Button>
+      <WithReadonlyWarningDialog
+        address={wallet.address}
+        onClick={onClick}
+        render={({ handleClick }) => {
+          return holdToSign ? (
+            <HoldableButton
+              text={`Hold to ${title}`}
+              successText={
+                <HStack gap={4} alignItems="center">
+                  <CheckIcon
+                    style={{
+                      width: 20,
+                      height: 20,
+                      color: 'var(--positive-500)',
+                    }}
+                  />
+                  <span>Sent</span>
+                </HStack>
+              }
+              submittingText="Sending..."
+              onClick={handleClick}
+              success={sendTxMutation.isSuccess}
+              submitting={sendTxMutation.isLoading}
+              error={sendTxMutation.isError}
+              disabled={disabled}
+              kind={buttonKind}
+              {...buttonProps}
+            />
+          ) : (
+            <Button
+              disabled={disabled}
+              onClick={handleClick}
+              kind={buttonKind}
+              {...buttonProps}
+            >
+              {children ||
+                (isLoading ? 'Sending...' : buttonTitle || 'Confirm')}
+            </Button>
+          );
+        }}
+      />
     );
   }
 );

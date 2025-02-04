@@ -1,4 +1,4 @@
-import { STANDARD_ERROR_MAP } from '@json-rpc-tools/utils';
+import { STANDARD_ERROR_MAP } from '@walletconnect/jsonrpc-utils';
 
 /**
  * Provider Errors: https://eips.ethereum.org/EIPS/eip-1193#provider-errors
@@ -85,7 +85,9 @@ export class OriginNotAllowed extends ErrorWithEnumerableMessage {
 export class SwitchChainError extends ErrorWithEnumerableMessage {
   code = 4902;
 
-  constructor(message = 'Chain not configured') {
+  constructor(
+    message = 'Unrecognized chainId: Try adding the chain using wallet_addEthereumChain first.'
+  ) {
     super(message);
   }
 }

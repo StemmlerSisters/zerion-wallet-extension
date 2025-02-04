@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import type { Networks } from 'src/modules/networks/Networks';
-import { networksStore } from 'src/modules/networks/networks-store.background';
+import { getNetworksStore } from 'src/modules/networks/networks-store.client';
 import type { Chain } from 'src/modules/networks/Chain';
+import type { ChainId } from 'src/modules/ethereum/transactions/ChainId';
 import { fetchNativeEvmPosition } from './fetchNativeEvmPosition';
 
 async function getEvmAddressPositions({
@@ -10,7 +11,7 @@ async function getEvmAddressPositions({
   networks,
 }: {
   address: string;
-  chainId: string;
+  chainId: ChainId;
   networks: Networks;
 }) {
   const position = await fetchNativeEvmPosition({ address, chainId, networks });
@@ -31,8 +32,9 @@ export function useEvmAddressPositions({
   return useQuery({
     queryKey: ['eth_getBalance/evmAddressPositions', address, chain],
     queryFn: async () => {
-      const networks = await networksStore.load();
-      const chainId = networks.getNetworkByName(chain)?.external_id;
+      const networksStore = await getNetworksStore();
+      const networks = await networksStore.load({ chains: [chain.toString()] });
+      const chainId = networks.getChainId(chain);
       return !address || !chainId
         ? null
         : getEvmAddressPositions({

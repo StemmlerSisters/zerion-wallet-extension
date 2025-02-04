@@ -1,61 +1,54 @@
-import { normalizeAddress } from 'src/shared/normalizeAddress';
-import {
-  EmptyResult,
-  requestWithCache,
-} from 'src/ui/shared/requests/requestWithCache';
-import { ensLookup, ensResolve } from './ens';
-import { lensLookup, lensResolve } from './lens';
-import { udLookup, udResolve } from './ud';
+import { ZerionAPI } from '../zerion-api/zerion-api.client';
+import type { Identity } from '../zerion-api/requests/wallet-get-meta';
 
-export type Registry = (address: string) => Promise<string | null>;
+const DOMAIN_PRIORITY: Record<Identity['provider'], number> = {
+  ens: 0,
+  lens: 1,
+  ud: 2,
+  unspecified: 3,
+};
 
-export const registries = [ensLookup, lensLookup, udLookup];
-export const resolvers = [ensResolve, lensResolve, udResolve];
-
-export async function lookupAddressNames(address: string): Promise<string[]> {
-  const addresses = await Promise.allSettled(
-    registries.map((lookup: Registry) => lookup(address))
-  ).then((results) => {
-    const fulfilled = results.filter(
-      (res) => res.status === 'fulfilled'
-    ) as PromiseFulfilledResult<string>[];
-    return fulfilled.map((res) => res.value);
-  });
-  return addresses.filter((address): address is string => address !== null);
+function identityComparator(a: Identity, b: Identity) {
+  return DOMAIN_PRIORITY[a.provider] - DOMAIN_PRIORITY[b.provider];
 }
 
+/** TODO:
+ * parameterize apiClient: ZerionApiClient as a dependency
+ * so that this method can be used in background scripts, too
+ */
+export async function lookupAddressNames(address: string): Promise<string[]> {
+  try {
+    const response = await ZerionAPI.getWalletsMeta({ identifiers: [address] });
+    return (
+      response.data?.[0]?.identities
+        .sort(identityComparator)
+        .map(({ handle }) => handle) || []
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** TODO:
+ * parameterize apiClient: ZerionApiClient as a dependency
+ * so that this method can be used in background scripts, too
+ */
 export async function lookupAddressName(
   address: string
 ): Promise<string | null> {
-  const names = await requestWithCache(
-    `lookupAddressName ${address}`,
-    lookupAddressNames(address).then((result) => {
-      if (!result.filter(Boolean).length) {
-        throw new EmptyResult();
-      }
-      return result;
-    })
-  );
+  const names = await lookupAddressNames(address);
   return names && names.length > 0 ? names[0] : null;
 }
 
+/** TODO:
+ * parameterize apiClient: ZerionApiClient as a dependency
+ * so that this method can be used in background scripts, too
+ */
 export async function resolveDomain(domain: string): Promise<string | null> {
-  const addresses = await Promise.allSettled(
-    resolvers.map((resolve: Registry) => {
-      try {
-        return resolve(domain);
-      } catch {
-        return null;
-      }
-    })
-  ).then((results) => {
-    const fulfilled = results.filter(
-      (res) => res.status === 'fulfilled'
-    ) as PromiseFulfilledResult<string>[];
-    return fulfilled.map((res) => res.value);
-  });
-  const resolvedAddress = addresses.filter(
-    (address): address is string => address !== null
-  )[0];
-  return resolvedAddress ? normalizeAddress(resolvedAddress) : null;
+  try {
+    const response = await ZerionAPI.getWalletsMeta({ identifiers: [domain] });
+    return response?.data?.[0]?.address || null;
+  } catch {
+    return null;
+  }
 }

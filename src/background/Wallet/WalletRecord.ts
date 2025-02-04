@@ -1,6 +1,7 @@
 import { decrypt, encrypt } from 'src/modules/crypto';
 import { produce } from 'immer';
 import { nanoid } from 'nanoid';
+import sortBy from 'lodash/sortBy';
 import { toChecksumAddress } from 'src/modules/ethereum/toChecksumAddress';
 import type { Chain } from 'src/modules/networks/Chain';
 import { createChain } from 'src/modules/networks/Chain';
@@ -8,7 +9,6 @@ import { normalizeAddress } from 'src/shared/normalizeAddress';
 import { getIndexFromPath } from 'src/shared/wallet/derivation-paths';
 import { NetworkId } from 'src/modules/networks/NetworkId';
 import type { WalletAbility } from 'src/shared/types/Daylight';
-import { NetworkSelectValue } from 'src/modules/networks/NetworkSelectValue';
 import {
   isEncryptedMnemonic,
   decryptMnemonic,
@@ -16,6 +16,7 @@ import {
 import { invariant } from 'src/shared/invariant';
 import {
   assertSignerContainer,
+  getContainerType,
   isHardwareContainer,
   isMnemonicContainer,
   isPrivateKeyContainer,
@@ -23,7 +24,11 @@ import {
   isSignerContainer,
 } from 'src/shared/types/validators';
 import { capitalize } from 'capitalize-ts';
+import { upgradeRecord } from 'src/shared/type-utils/versions';
+import type { LocallyEncoded } from 'src/shared/wallet/encode-locally';
+import { encodeForMasking } from 'src/shared/wallet/encode-locally';
 import type { Credentials, SessionCredentials } from '../account/Credentials';
+import { emitter } from '../events';
 import type {
   PendingWallet,
   WalletContainer,
@@ -32,7 +37,6 @@ import type {
   WalletRecord,
 } from './model/types';
 import type { BareWallet } from './model/BareWallet';
-import { upgrade } from './model/versions';
 import {
   MnemonicWalletContainer,
   PrivateKeyWalletContainer,
@@ -42,6 +46,7 @@ import {
   ReadonlyAccountContainer,
   type ExternallyOwnedAccount,
 } from './model/AccountContainer';
+import { walletRecordUpgrades } from './model/versions';
 
 function generateGroupName(
   record: WalletRecord | null,
@@ -185,7 +190,10 @@ export class WalletRecordModel {
   }
 
   static getWalletGroupByAddress(record: WalletRecord, address: string) {
-    for (const group of record.walletManager.groups) {
+    const sortedGroups = sortBy(record.walletManager.groups, (group) =>
+      getContainerType(group.walletContainer)
+    );
+    for (const group of sortedGroups) {
       const wallet = group.walletContainer.getWalletByAddress(address);
       if (wallet) {
         return group;
@@ -194,21 +202,32 @@ export class WalletRecordModel {
     return null;
   }
 
-  static getWalletByAddress(record: WalletRecord, address: string) {
-    for (const group of record.walletManager.groups) {
-      const wallet = group.walletContainer.getWalletByAddress(address);
-      if (wallet) {
-        return wallet;
+  static getWalletByAddress(
+    record: WalletRecord,
+    { address, groupId }: { address: string; groupId: string | null }
+  ) {
+    const sortedGroups = sortBy(record.walletManager.groups, (group) =>
+      getContainerType(group.walletContainer)
+    );
+    const group = sortedGroups.find((group) => {
+      if (groupId) {
+        return group.id === groupId;
+      } else {
+        return group.walletContainer.getWalletByAddress(address);
       }
-    }
-    return null;
+    });
+    const wallet = group?.walletContainer.getWalletByAddress(address) ?? null;
+    return wallet;
   }
 
   static getSignerWalletByAddress(
     record: WalletRecord,
     address: string
   ): BareWallet | null {
-    for (const group of record.walletManager.groups) {
+    const sortedGroups = sortBy(record.walletManager.groups, (group) =>
+      getContainerType(group.walletContainer)
+    );
+    for (const group of sortedGroups) {
       if (isSignerContainer(group.walletContainer)) {
         const wallet = group.walletContainer.getWalletByAddress(address);
         if (wallet) {
@@ -217,6 +236,26 @@ export class WalletRecordModel {
       }
     }
     return null;
+  }
+
+  /** Currently only looks for matches among mnemonic groups, but can be updated */
+  static getMatchingExistingWalletGroup(
+    record: WalletRecord,
+    walletContainer: WalletContainer
+  ): WalletGroup | undefined {
+    if (isMnemonicContainer(walletContainer)) {
+      const mnemonic = walletContainer.getMnemonic();
+      invariant(mnemonic?.phrase, 'Mnemonic not found');
+      const { seedHash } = walletContainer;
+      return record.walletManager.groups.find((group) => {
+        return (
+          isSignerContainer(group.walletContainer) &&
+          (seedHash
+            ? seedHash === group.walletContainer.seedHash
+            : group.walletContainer.getMnemonic()?.phrase === mnemonic.phrase)
+        );
+      });
+    }
   }
 
   static createOrUpdateRecord(
@@ -260,6 +299,44 @@ export class WalletRecordModel {
       if (!draft.feed.dismissedAbilities) {
         draft.feed.dismissedAbilities = [];
       }
+      /**
+       * NOTE:
+       * (De)duplication logic:
+       * When adding signer/hw wallet, existing readonly wallet should be removed
+       * When adding readonly address, it should be ignored if signer/hw wallet exists
+       * Duplication of addresses between mnemonic/privateKey/HW wallets is allowed
+       */
+
+      // Reuse existing wallet names for new addresses
+      for (const wallet of walletContainer.wallets) {
+        if (!wallet.name) {
+          const existingWallet = WalletRecordModel.getWalletByAddress(record, {
+            address: wallet.address,
+            groupId: null,
+          });
+          if (existingWallet && existingWallet.name) {
+            wallet.name = existingWallet.name;
+          }
+        }
+      }
+
+      // Remove existing readonly wallets if they exist
+      if (!isReadonlyContainer(walletContainer)) {
+        for (const wallet of walletContainer.wallets) {
+          const existingReadonlyGroup = draft.walletManager.groups.find(
+            (group) =>
+              isReadonlyContainer(group.walletContainer) &&
+              group.walletContainer.getWalletByAddress(wallet.address)
+          );
+          if (existingReadonlyGroup) {
+            WalletRecordModel.mutateRemoveAddress(draft, {
+              address: wallet.address,
+              groupId: existingReadonlyGroup.id,
+            });
+          }
+        }
+      }
+
       if (isPrivateKeyGroup) {
         const { privateKey } = walletContainer.getFirstWallet();
         // NOTE:
@@ -275,7 +352,7 @@ export class WalletRecordModel {
           );
         });
         if (existingGroup) {
-          return draft; // NOTE: private key already exists, should we update record or keep untouched?
+          return draft; // NOTE: private key group already exists, should we update record or keep untouched?
         } else {
           draft.walletManager.groups.push(
             createGroup({
@@ -290,14 +367,11 @@ export class WalletRecordModel {
         const mnemonic = walletContainer.getMnemonic();
         invariant(mnemonic?.phrase, 'Mnemonic not found');
         const { seedHash } = walletContainer;
-        const existingGroup = draft.walletManager.groups.find((group) => {
-          return (
-            isSignerContainer(group.walletContainer) &&
-            (seedHash
-              ? seedHash === group.walletContainer.seedHash
-              : group.walletContainer.getMnemonic()?.phrase === mnemonic.phrase)
-          );
-        });
+        const existingGroup = WalletRecordModel.getMatchingExistingWalletGroup(
+          draft,
+          walletContainer
+        );
+
         if (existingGroup && seedHash) {
           assertSignerContainer(existingGroup.walletContainer);
           for (const wallet of walletContainer.wallets) {
@@ -376,7 +450,7 @@ export class WalletRecordModel {
       encryptionKey,
       encryptedRecord
     )) as WalletRecord;
-    const entry = upgrade(persistedEntry);
+    const entry = upgradeRecord(persistedEntry, walletRecordUpgrades);
 
     entry.walletManager.groups = await Promise.all(
       entry.walletManager.groups.map(async (group) => {
@@ -397,7 +471,7 @@ export class WalletRecordModel {
           const { wallets } = group.walletContainer;
           group.walletContainer = new ReadonlyAccountContainer(wallets);
         } else {
-          throw new Error(`Unexpected Account Container`);
+          throw new Error('Unexpected Account Container');
         }
         return group;
       })
@@ -412,7 +486,7 @@ export class WalletRecordModel {
       groupId,
       credentials,
     }: { groupId: string; credentials: SessionCredentials }
-  ) {
+  ): Promise<{ phrase: LocallyEncoded; path: string }> {
     const group = record.walletManager.groups.find(
       (group) => group.id === groupId
     );
@@ -428,20 +502,23 @@ export class WalletRecordModel {
     }
     const isNotEncrypted = !isEncryptedMnemonic(encryptedMnemonic.phrase);
     if (isNotEncrypted) {
-      return encryptedMnemonic;
+      return {
+        ...encryptedMnemonic,
+        phrase: encodeForMasking(encryptedMnemonic.phrase),
+      };
     }
 
     const phrase = await decryptMnemonic(encryptedMnemonic.phrase, credentials);
     return {
       ...encryptedMnemonic,
-      phrase,
+      phrase: encodeForMasking(phrase),
     };
   }
 
   static async getPendingRecoveryPhrase(
     pendingWallet: PendingWallet,
     credentials: SessionCredentials
-  ) {
+  ): Promise<LocallyEncoded> {
     const walletContainer = pendingWallet.walletContainer;
     if (!walletContainer || !isMnemonicContainer(walletContainer)) {
       throw new Error('Pending wallet is not a Mnemonic Container');
@@ -450,7 +527,8 @@ export class WalletRecordModel {
     if (!encryptedPhrase) {
       throw new Error('Pending wallet does not have a seed phrase');
     }
-    return decryptMnemonic(encryptedPhrase, credentials);
+    const phrase = await decryptMnemonic(encryptedPhrase, credentials);
+    return encodeForMasking(phrase);
   }
 
   static async getPrivateKey(
@@ -471,7 +549,7 @@ export class WalletRecordModel {
     if (!wallet) {
       throw new Error('Wallet with given address not found');
     }
-    return wallet.privateKey;
+    return encodeForMasking(wallet.privateKey);
   }
 
   static setCurrentAddress(
@@ -529,44 +607,66 @@ export class WalletRecordModel {
     });
   }
 
-  static removeAddress(record: WalletRecord, { address }: { address: string }) {
-    return produce(record, (draft) => {
-      const normalizedAddress = normalizeAddress(address);
-      const [pos, group] = findWithIndex(draft.walletManager.groups, (group) =>
-        group.walletContainer.wallets.some(
+  /**
+   * if {groupId} is provided, remove wallet from this group,
+   * otherwise, find first group that holds this address
+   */
+  static mutateRemoveAddress(
+    draft: WalletRecord,
+    { address, groupId }: { address: string; groupId: string | null }
+  ) {
+    const normalizedAddress = normalizeAddress(address);
+    const [pos, group] = findWithIndex(draft.walletManager.groups, (group) => {
+      if (groupId) {
+        return group.id === groupId;
+      } else {
+        return group.walletContainer.wallets.some(
           (wallet) => normalizeAddress(wallet.address) === normalizedAddress
-        )
-      );
-      if (!group) {
-        throw new Error('Group not found');
-      }
-      const isLastAddress = group.walletContainer.wallets.length === 1;
-      if (isMnemonicContainer(group.walletContainer) && isLastAddress) {
-        // I guess this is a safetyguard to prevent removing unbackedup mnemonic groups
-        throw new Error(
-          'Removing last wallet from a Mnemonic group is not allowed. You can remove the whole group'
         );
       }
+    });
+    if (!group) {
+      throw new Error('Group not found');
+    }
+    const isLastAddress = group.walletContainer.wallets.length === 1;
+    if (isMnemonicContainer(group.walletContainer) && isLastAddress) {
+      // I guess this is a safetyguard to prevent removing unbackedup mnemonic groups
+      throw new Error(
+        'Removing last wallet from a Mnemonic group is not allowed. You can remove the whole group'
+      );
+    }
+    if (isHardwareContainer(group.walletContainer) && isLastAddress) {
+      throw new Error(
+        'Removing last wallet from a Hardware group is not allowed. You can remove the whole group'
+      );
+    }
+    if (isLastAddress) {
+      // remove whole group
+      draft.walletManager.groups.splice(pos, 1);
+    } else {
+      group.walletContainer.removeWallet(address);
+    }
+    const { currentAddress } = draft.walletManager;
+    const shouldChangeCurrentAddress =
+      currentAddress && normalizedAddress === normalizeAddress(currentAddress);
+    if (shouldChangeCurrentAddress) {
       if (isLastAddress) {
-        // remove whole group
-        draft.walletManager.groups.splice(pos, 1);
+        draft.walletManager.currentAddress =
+          draft.walletManager.groups[0]?.walletContainer.getFirstWallet()
+            .address || null;
       } else {
-        group.walletContainer.removeWallet(address);
+        draft.walletManager.currentAddress =
+          group.walletContainer.getFirstWallet().address;
       }
-      const { currentAddress } = draft.walletManager;
-      const shouldChangeCurrentAddress =
-        currentAddress &&
-        normalizedAddress === normalizeAddress(currentAddress);
-      if (shouldChangeCurrentAddress) {
-        if (isLastAddress) {
-          draft.walletManager.currentAddress =
-            draft.walletManager.groups[0]?.walletContainer.getFirstWallet()
-              .address || null;
-        } else {
-          draft.walletManager.currentAddress =
-            group.walletContainer.getFirstWallet().address;
-        }
-      }
+    }
+  }
+
+  static removeAddress(
+    record: WalletRecord,
+    { address, groupId }: { address: string; groupId: string | null }
+  ) {
+    return produce(record, (draft) => {
+      WalletRecordModel.mutateRemoveAddress(draft, { address, groupId });
     });
   }
 
@@ -580,15 +680,19 @@ export class WalletRecordModel {
     }
     const normalizedAddress = normalizeAddress(address);
     return produce(record, (draft) => {
+      let didRename = false;
       for (const group of draft.walletManager.groups) {
         for (const wallet of group.walletContainer.wallets) {
           if (normalizeAddress(wallet.address) === normalizedAddress) {
             wallet.name = name || null;
-            return;
+            didRename = true;
+            // NOTE: don't break loop as we expect multiple groups to hold same address
           }
         }
       }
-      throw new Error(`Wallet for ${address} not found`);
+      if (!didRename) {
+        throw new Error(`Wallet for ${address} not found`);
+      }
     });
   }
 
@@ -675,12 +779,7 @@ export class WalletRecordModel {
         existingPermissions.length = 0;
       }
       if (existingPermissions.length === 0) {
-        if (!permission.chain || permission.chain === NetworkId.Ethereum) {
-          // remove whole record for `origin` completely
-          delete draft.permissions[origin];
-        } else {
-          draft.permissions[origin].addresses = [];
-        }
+        delete draft.permissions[origin];
       }
     });
   }
@@ -694,6 +793,11 @@ export class WalletRecordModel {
       recentAddresses: [],
       mintDnaBannerDismissed: false,
       upgradeDnaBannerDismissed: false,
+      inviteFriendsBannerDismissed: false,
+      backupReminderDismissedTime: 0,
+      enableTestnets: false,
+      testnetMode: null,
+      enableHoldToSignButton: null,
     };
     if (!record) {
       return defaults;
@@ -706,26 +810,15 @@ export class WalletRecordModel {
     record: WalletRecord,
     { preferences }: { preferences: Partial<WalletRecord['publicPreferences']> }
   ) {
+    if (preferences.enableHoldToSignButton != null) {
+      emitter.emit(
+        'holdToSignPreferenceChange',
+        preferences.enableHoldToSignButton
+      );
+    }
     return produce(record, (draft) => {
       Object.assign(draft.publicPreferences, preferences);
     });
-  }
-
-  static verifyOverviewChain(
-    record: WalletRecord,
-    { availableChains }: { availableChains: Chain[] }
-  ) {
-    const { overviewChain } = record.publicPreferences;
-    if (
-      overviewChain &&
-      !availableChains.includes(createChain(overviewChain))
-    ) {
-      return produce(record, (draft) => {
-        draft.publicPreferences.overviewChain = NetworkSelectValue.All;
-      });
-    } else {
-      return record;
-    }
   }
 
   static updateLastBackedUp(

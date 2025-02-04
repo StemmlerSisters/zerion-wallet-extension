@@ -15,6 +15,8 @@ import { ViewLoading } from 'src/ui/components/ViewLoading';
 import { DelayedRender } from 'src/ui/components/DelayedRender';
 import { createChain } from 'src/modules/networks/Chain';
 import { collectData } from 'src/ui/shared/form-data';
+import type { AddEthereumChainParameter } from 'src/modules/ethereum/types/AddEthereumChainParameter';
+import { toAddEthereumChainParameter } from 'src/modules/networks/helpers';
 import { Field } from '../../Networks/NetworkForm/NetworkForm';
 
 export function RpcUrlForm({
@@ -22,20 +24,20 @@ export function RpcUrlForm({
   prevNetwork,
   isSubmitting,
   onSubmit,
-  onCancel,
+  onKeepCurrent,
   rpcUrlHelpHref,
 }: {
   network: NetworkConfig;
   prevNetwork: NetworkConfig;
   rpcUrlHelpHref: string;
   isSubmitting: boolean;
-  onSubmit: (result: NetworkConfig) => void;
-  onCancel: () => void;
+  onSubmit: (chain: string, result: AddEthereumChainParameter) => void;
+  onKeepCurrent: () => void;
 }) {
   const { networks } = useNetworks();
 
   const currentRpcUrl = networks?.getRpcUrlInternal(
-    createChain(prevNetwork.chain)
+    createChain(prevNetwork.id)
   );
 
   const id = useId();
@@ -62,7 +64,7 @@ export function RpcUrlForm({
         const result = produce(prevNetwork, (draft) =>
           merge(draft, formObject)
         );
-        onSubmit(result);
+        onSubmit(network.id, toAddEthereumChainParameter(result));
       }}
     >
       <VStack gap={16}>
@@ -120,11 +122,11 @@ export function RpcUrlForm({
             gap: 8,
           }}
         >
-          <Button type="button" kind="regular" onClick={onCancel}>
-            Cancel
+          <Button type="button" kind="regular" onClick={onKeepCurrent}>
+            Keep Current
           </Button>
           <Button form={id} disabled={isSubmitting} kind="primary">
-            {isSubmitting ? 'Loading...' : 'Update'}
+            {isSubmitting ? 'Loading...' : 'Accept'}
           </Button>
         </div>
       </Content>

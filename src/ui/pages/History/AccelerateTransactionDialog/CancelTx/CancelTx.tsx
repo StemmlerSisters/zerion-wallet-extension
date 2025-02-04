@@ -15,7 +15,7 @@ import {
 import { useGasPrices } from 'src/ui/shared/requests/useGasPrices';
 import { createChain } from 'src/modules/networks/Chain';
 import { focusNode } from 'src/ui/shared/focusNode';
-import type { SignerSenderHandle } from 'src/ui/components/SignTransactionButton';
+import type { SendTxBtnHandle } from 'src/ui/components/SignTransactionButton';
 import { SignTransactionButton } from 'src/ui/components/SignTransactionButton';
 import { useMutation } from '@tanstack/react-query';
 import type { ExternallyOwnedAccount } from 'src/shared/types/ExternallyOwnedAccount';
@@ -31,6 +31,8 @@ import type {
 } from 'src/modules/ethereum/types/IncomingTransaction';
 import { getError } from 'src/shared/errors/getError';
 import { CircleSpinner } from 'src/ui/ui-kit/CircleSpinner';
+import { wait } from 'src/shared/wait';
+import { usePreferences } from 'src/ui/features/preferences';
 import { NetworkFee } from '../../../SendTransaction/NetworkFee';
 import { useTransactionFee } from '../../../SendTransaction/TransactionConfiguration/useTransactionFee';
 import {
@@ -57,6 +59,7 @@ function CancelTxContent({
   onSuccess: () => void;
 }) {
   const { address } = wallet;
+  const { preferences } = usePreferences();
   const { transaction: originalTransaction } = addressAction;
   const [configuration, setConfiguration] = useState(DEFAULT_CONFIGURATION);
   const chain = createChain(originalTransaction.chain);
@@ -80,7 +83,7 @@ function CancelTxContent({
     onFeeValueCommonReady: handleFeeValueCommonReady,
   });
 
-  const signerSenderRef = useRef<SignerSenderHandle | null>(null);
+  const signTxBtnRef = useRef<SendTxBtnHandle | null>(null);
 
   const {
     mutate: sendTransaction,
@@ -95,16 +98,17 @@ function CancelTxContent({
       const { nonce } = transaction;
       invariant(chain, 'Chain must be defined to sign the tx');
       invariant(nonce, 'Transaction must have a nonce');
-      invariant(signerSenderRef.current, 'SignTransactionButton not found');
+      invariant(signTxBtnRef.current, 'SignTransactionButton not found');
       const tx = applyConfiguration(
         transaction,
         { ...configuration, nonce: String(nonce) },
         acceleratedGasPrices
       );
-      const txResponse = await signerSenderRef.current.sendTransaction({
+      const txResponse = await signTxBtnRef.current.sendTransaction({
         transaction: tx,
-        chain,
+        chain: chain.toString(),
         initiator: INTERNAL_ORIGIN,
+        clientScope: 'Cancel',
         feeValueCommon,
         addressAction: createCancelAddressAction(addressAction, tx),
       });
@@ -114,7 +118,12 @@ function CancelTxContent({
     // a global onError handler (src/ui/shared/requests/queryClient.ts)
     // TODO: refactor to just emit error directly from the mutationFn
     onMutate: () => 'sendTransaction',
-    onSuccess,
+    onSuccess: async () => {
+      if (preferences?.enableHoldToSignButton) {
+        await wait(500);
+      }
+      onSuccess();
+    },
   });
   return (
     <>
@@ -204,11 +213,14 @@ function CancelTxContent({
             >
               Back
             </Button>
-            <SignTransactionButton
-              wallet={wallet}
-              ref={signerSenderRef}
-              onClick={() => sendTransaction()}
-            />
+            {preferences ? (
+              <SignTransactionButton
+                wallet={wallet}
+                ref={signTxBtnRef}
+                onClick={() => sendTransaction()}
+                holdToSign={preferences.enableHoldToSignButton}
+              />
+            ) : null}
           </div>
         </VStack>
       </VStack>

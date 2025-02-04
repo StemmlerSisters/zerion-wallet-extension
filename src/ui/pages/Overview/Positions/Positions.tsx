@@ -1,9 +1,4 @@
-import type {
-  AddressParams,
-  AddressPosition,
-  AddressPositionDappInfo,
-} from 'defi-sdk';
-import { useAddressPositions } from 'defi-sdk';
+import type { AddressPosition, AddressPositionDappInfo } from 'defi-sdk';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   formatCurrencyToParts,
@@ -45,7 +40,6 @@ import { useNetworks } from 'src/modules/networks/useNetworks';
 import { createChain } from 'src/modules/networks/Chain';
 import { ViewLoading } from 'src/ui/components/ViewLoading';
 import { DelayedRender } from 'src/ui/components/DelayedRender';
-import { useQuery } from '@tanstack/react-query';
 import { intersperce } from 'src/ui/shared/intersperce';
 import { NetworkSelectValue } from 'src/modules/networks/NetworkSelectValue';
 import { NetworkIcon } from 'src/ui/components/NetworkIcon';
@@ -53,19 +47,28 @@ import { NeutralDecimals } from 'src/ui/ui-kit/NeutralDecimals';
 import { getCommonQuantity } from 'src/modules/networks/asset';
 import { useRenderDelay } from 'src/ui/components/DelayedRender/DelayedRender';
 import { minus } from 'src/ui/shared/typography';
-import { getActiveTabOrigin } from 'src/ui/shared/requests/getActiveTabOrigin';
 import { useEvmAddressPositions } from 'src/ui/shared/requests/useEvmAddressPositions';
 import { CenteredFillViewportView } from 'src/ui/components/FillView/FillView';
 import { EmptyView } from 'src/ui/components/EmptyView';
 import { invariant } from 'src/shared/invariant';
-import { requestChainForOrigin } from 'src/ui/shared/requests/requestChainForOrigin';
 import { SurfaceItemAnchor } from 'src/ui/ui-kit/SurfaceList';
 import { ErrorBoundary } from 'src/ui/components/ErrorBoundary';
+import { useStore } from '@store-unit/react';
+import { usePreferences } from 'src/ui/features/preferences';
+import { useCurrency } from 'src/modules/currency/useCurrency';
+import { Spacer } from 'src/ui/ui-kit/Spacer';
+import { useHttpAddressPositions } from 'src/modules/zerion-api/hooks/useWalletPositions';
+import { useHttpClientSource } from 'src/modules/zerion-api/hooks/useHttpClientSource';
+import { useWalletPortfolio } from 'src/modules/zerion-api/hooks/useWalletPortfolio';
+import type { WalletPortfolio } from 'src/modules/zerion-api/requests/wallet-get-portfolio';
+import { usePositionsRefetchInterval } from 'src/ui/transactions/usePositionsRefetchInterval';
+import { openHrefInTabIfSidepanel } from 'src/ui/shared/openInTabIfInSidepanel';
 import {
-  GROWN_TAB_MAX_HEIGHT,
   TAB_SELECTOR_HEIGHT,
-  TAB_STICKY_OFFSET,
   TAB_TOP_PADDING,
+  getGrownTabMaxHeight,
+  getStickyOffset,
+  offsetValues,
 } from '../getTabsOffset';
 import { DappLink } from './DappLink';
 import { NetworkBalance } from './NetworkBalance';
@@ -137,6 +140,7 @@ function AddressPositionItem({
   hasPreviosNestedPosition?: boolean;
   showGasIcon?: boolean;
 }) {
+  const { currency } = useCurrency();
   const isNested = Boolean(position.parent_id);
   const { networks } = useNetworks();
   const network = networks?.getNetworkByName(createChain(position.chain));
@@ -197,7 +201,7 @@ function AddressPositionItem({
             <UIText
               kind="small/regular"
               style={{
-                color: 'var(--neutral-500)',
+                color: 'var(--neutral-700)',
                 display: 'flex',
                 gap: 4,
                 alignItems: 'center',
@@ -207,8 +211,7 @@ function AddressPositionItem({
                 <NetworkIcon
                   size={16}
                   name={network?.name || null}
-                  chainId={network?.external_id || null}
-                  src={network?.icon_url || ''}
+                  src={network?.icon_url}
                 />
               ) : null}
               {intersperce(
@@ -252,7 +255,7 @@ function AddressPositionItem({
         {position.value != null ? (
           <VStack gap={0} style={{ textAlign: 'right' }}>
             <UIText kind="body/regular">
-              {formatCurrencyValue(position.value, 'en', 'usd')}
+              {formatCurrencyValue(position.value, 'en', currency)}
             </UIText>
             {position.asset.price?.relative_change_24h ? (
               <UIText
@@ -265,14 +268,10 @@ function AddressPositionItem({
               >
                 {`${
                   position.asset.price.relative_change_24h > 0 ? '+' : minus
-                }${formatCurrencyValue(
-                  absoluteChange,
-                  'en',
-                  'usd'
-                )} (${formatPercent(
-                  position.asset.price.relative_change_24h,
+                }${formatPercent(
+                  Math.abs(position.asset.price.relative_change_24h),
                   'en'
-                )}%)`}
+                )}% (${formatCurrencyValue(absoluteChange, 'en', currency)})`}
               </UIText>
             ) : null}
           </VStack>
@@ -300,40 +299,24 @@ interface PreparedPositions {
 }
 
 function usePreparedPositions({
-  items: unfilteredItems,
+  items,
   groupType,
+  moveGasPositionToFront,
+  dappChain,
 }: {
   items: AddressPosition[];
   groupType: PositionsGroupType;
+  moveGasPositionToFront: boolean;
+  dappChain: string | null;
 }): PreparedPositions {
-  const { data: tabData } = useQuery({
-    queryKey: ['activeTab/origin'],
-    queryFn: getActiveTabOrigin,
-    suspense: false,
-  });
-  const tabOrigin = tabData?.tabOrigin;
-  const { data: siteChain } = useQuery({
-    queryKey: ['requestChainForOrigin', tabOrigin],
-    queryFn: () => requestChainForOrigin(tabOrigin),
-    enabled: Boolean(tabOrigin),
-    suspense: false,
-  });
   const { networks } = useNetworks();
   const nativeAssetId = useMemo(() => {
-    if (!siteChain) {
+    if (!dappChain) {
       return null;
     }
-    const network = networks?.getNetworkByName(siteChain);
+    const network = networks?.getNetworkByName(createChain(dappChain));
     return network?.native_asset?.id || null;
-  }, [networks, siteChain]);
-
-  const items = useMemo(
-    () =>
-      unfilteredItems.filter((item) =>
-        item.type === 'asset' ? item.is_displayable : true
-      ),
-    [unfilteredItems]
-  );
+  }, [networks, dappChain]);
 
   const gasPositionId = useMemo(() => {
     return (
@@ -341,11 +324,11 @@ function usePreparedPositions({
         (item) =>
           !item.dapp &&
           item.type === 'asset' &&
-          item.chain === siteChain?.toString() &&
+          item.chain === dappChain?.toString() &&
           item.asset.id === nativeAssetId
       )?.id || null
     );
-  }, [siteChain, nativeAssetId, items]);
+  }, [dappChain, nativeAssetId, items]);
 
   const totalValue = useMemo(() => getFullPositionsValue(items), [items]);
   return useMemo(() => {
@@ -377,13 +360,15 @@ function usePreparedPositions({
         nameIndex[name] = sortPositionsByParentId(
           clearMissingParentIds(byName[name])
         );
-        const gasPositionIndex = nameIndex[name].findIndex(
-          (item) => item.id === gasPositionId
-        );
-        if (gasPositionIndex >= 0) {
-          const gasPosition = nameIndex[name][gasPositionIndex];
-          nameIndex[name].splice(gasPositionIndex, 1);
-          nameIndex[name].unshift(gasPosition);
+        if (moveGasPositionToFront) {
+          const gasPositionIndex = nameIndex[name].findIndex(
+            (item) => item.id === gasPositionId
+          );
+          if (gasPositionIndex >= 0) {
+            const gasPosition = nameIndex[name][gasPositionIndex];
+            nameIndex[name].splice(gasPositionIndex, 1);
+            nameIndex[name].unshift(gasPosition);
+          }
         }
       }
       dappIndex[dappId] = {
@@ -404,12 +389,11 @@ function usePreparedPositions({
       dappIds,
       dappIndex,
     };
-  }, [groupType, items, totalValue, gasPositionId]);
+  }, [groupType, items, gasPositionId, totalValue, moveGasPositionToFront]);
 }
 
 function ProtocolHeading({
   dappInfo,
-  value,
   relativeValue,
 }: {
   dappInfo: AddressPositionDappInfo;
@@ -428,16 +412,11 @@ function ProtocolHeading({
           style={{ borderRadius: 6 }}
         />
       )}
-      <UIText kind="body/accent">
-        {dappInfo.name || dappInfo.id}
-        {' · '}
-        <NeutralDecimals parts={formatCurrencyToParts(value, 'en', 'usd')} />
-      </UIText>
+      <UIText kind="body/accent">{dappInfo.name || dappInfo.id}</UIText>
       <UIText
         inline={true}
         kind="caption/accent"
         style={{
-          paddingBlock: 4,
           paddingInline: 6,
           backgroundColor: 'var(--neutral-200)',
           borderRadius: 8,
@@ -452,9 +431,13 @@ function ProtocolHeading({
 function PositionList({
   items,
   address,
+  moveGasPositionToFront,
+  dappChain,
 }: {
   items: AddressPosition[];
   address: string | null;
+  moveGasPositionToFront: boolean;
+  dappChain: string | null;
 }) {
   const COLLAPSED_COUNT = 5;
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -471,13 +454,21 @@ function PositionList({
       }),
     []
   );
+  const { preferences } = usePreferences();
 
   const groupType = PositionsGroupType.platform;
-  const preparedPositions = usePreparedPositions({ items, groupType });
+  const preparedPositions = usePreparedPositions({
+    items,
+    groupType,
+    moveGasPositionToFront,
+    dappChain,
+  });
+  const offsetValuesState = useStore(offsetValues);
+  const { currency } = useCurrency();
 
   return (
-    <VStack gap={16}>
-      {preparedPositions.dappIds.map((dappId) => {
+    <VStack gap={24}>
+      {preparedPositions.dappIds.map((dappId, dappIndex) => {
         const items: Item[] = [];
         const {
           totalValue,
@@ -487,6 +478,7 @@ function PositionList({
           items: protocolItems,
         } = preparedPositions.dappIndex[dappId];
         let dappPositionCounter = 0;
+        let subHeadingIndex = 0;
         // do not hide if only one item is left
         const stopAt =
           protocolItems.length - COLLAPSED_COUNT > 1
@@ -500,24 +492,44 @@ function PositionList({
               pad: false,
               component: (
                 <UIText
-                  kind="caption/accent"
-                  color="var(--neutral-700)"
-                  style={{ paddingBlock: 4 }}
+                  kind="small/regular"
+                  color="var(--black)"
+                  style={{
+                    paddingTop: subHeadingIndex > 0 ? 8 : 4,
+                    paddingBottom: 4,
+                    overflowWrap: 'break-word',
+                  }}
                 >
-                  {name.toUpperCase()}
+                  {name}
                 </UIText>
               ),
             });
+            subHeadingIndex += 1;
           }
           let namePositionCounter = 0;
           for (const position of nameIndex[name]) {
+            const showAsLink = !preferences?.testnetMode?.on;
+            const itemContent = (
+              <AddressPositionItem
+                position={position}
+                groupType={groupType}
+                hasPreviosNestedPosition={
+                  namePositionCounter > 0 &&
+                  Boolean(nameIndex[name][namePositionCounter - 1].parent_id)
+                }
+                showGasIcon={preparedPositions.gasPositionId === position.id}
+              />
+            );
             items.push({
               key: position.id,
               separatorLeadingInset: position.parent_id ? 26 : 0,
-              pad: false,
-              style: { padding: 0 },
-              component: (
+              pad: !showAsLink,
+              style: showAsLink ? { padding: 0 } : undefined,
+              // NODE: Don't link to web in testnet mode
+              // TODO: remove this conditional when we have Asset Page in extension
+              component: showAsLink ? (
                 <SurfaceItemAnchor
+                  onClick={openHrefInTabIfSidepanel}
                   href={`https://app.zerion.io/tokens/${
                     position.asset.symbol
                   }-${position.asset.asset_code}${
@@ -526,20 +538,10 @@ function PositionList({
                   target="_blank"
                   decorationStyle={{ borderRadius: 16 }}
                 >
-                  <AddressPositionItem
-                    position={position}
-                    groupType={groupType}
-                    hasPreviosNestedPosition={
-                      namePositionCounter > 0 &&
-                      Boolean(
-                        nameIndex[name][namePositionCounter - 1].parent_id
-                      )
-                    }
-                    showGasIcon={
-                      preparedPositions.gasPositionId === position.id
-                    }
-                  />
+                  {itemContent}
                 </SurfaceItemAnchor>
+              ) : (
+                itemContent
               ),
             });
             namePositionCounter++;
@@ -575,38 +577,63 @@ function PositionList({
         };
 
         return (
-          <VStack gap={4} key={dappId}>
+          <VStack gap={0} key={dappId}>
             {preparedPositions.dappIds.length > 1 ? (
-              <div
-                style={{
-                  paddingInline: 16,
-                  paddingBottom: 4,
-                  position: 'sticky',
-                  top:
-                    TAB_STICKY_OFFSET + TAB_SELECTOR_HEIGHT + TAB_TOP_PADDING,
-                  zIndex: 1,
-                  backgroundColor: 'var(--white)',
-                }}
-              >
-                <ProtocolHeading
-                  dappInfo={dappInfo}
-                  value={totalValue}
-                  relativeValue={relativeValue}
-                />
-              </div>
+              <>
+                <div
+                  style={{
+                    paddingBottom: 4,
+                    paddingInline: 16,
+                    position: 'sticky',
+                    top:
+                      getStickyOffset(offsetValuesState) +
+                      TAB_SELECTOR_HEIGHT +
+                      TAB_TOP_PADDING,
+                    zIndex: 1,
+                    backgroundColor: 'var(--white)',
+                  }}
+                >
+                  <ProtocolHeading
+                    dappInfo={dappInfo}
+                    value={totalValue}
+                    relativeValue={relativeValue}
+                  />
+                </div>
+                <Spacer height={4} />
+                <UIText style={{ paddingInline: 16 }} kind="headline/h2">
+                  <NeutralDecimals
+                    parts={formatCurrencyToParts(totalValue, 'en', currency)}
+                  />
+                </UIText>
+              </>
             ) : null}
             {dappInfo.url ? (
-              <DappLink
-                dappInfo={dappInfo}
-                style={{ marginInline: 16, marginBlock: 4 }}
-              />
-            ) : null}
+              <>
+                <Spacer height={16} />
+                <DappLink dappInfo={dappInfo} style={{ marginInline: 16 }} />
+                <Spacer height={16} />
+              </>
+            ) : (
+              <Spacer height={8} />
+            )}
             <SurfaceList
-              style={{ position: 'relative', paddingBlock: 0, zIndex: 0 }}
+              style={{ position: 'relative', zIndex: 0 }}
               // estimateSize={(index) => (index === 0 ? 52 : 60 + 1)}
               // overscan={5} // the library detects window edge incorrectly, increasing overscan just visually hides the problem
               items={items}
             />
+            {dappIndex !== preparedPositions.dappIds.length - 1 ? (
+              <>
+                <Spacer height={14} />
+                <div
+                  style={{
+                    height: 2,
+                    marginInline: 16,
+                    backgroundColor: 'var(--neutral-200)',
+                  }}
+                />
+              </>
+            ) : null}
           </VStack>
         );
       })}
@@ -615,36 +642,44 @@ function PositionList({
 }
 
 function MultiChainPositions({
-  addressParams,
+  address,
   filterChain,
   dappChain,
   onChainChange,
   renderEmptyView,
   renderLoadingView,
+  portfolioDecomposition,
   ...positionListProps
 }: {
-  addressParams: AddressParams;
+  address: string;
   renderEmptyView: () => React.ReactNode;
   renderLoadingView: () => React.ReactNode;
   dappChain: string | null;
   filterChain: string | null;
   onChainChange: (value: string | null) => void;
+  portfolioDecomposition: WalletPortfolio | null;
 } & Omit<React.ComponentProps<typeof PositionList>, 'items'>) {
-  const { value, isLoading } = useAddressPositions({
-    ...addressParams,
-    currency: 'usd',
-  });
+  const { currency } = useCurrency();
+  const { data, isLoading } = useHttpAddressPositions(
+    { addresses: [address], currency },
+    { source: useHttpClientSource() },
+    { refetchInterval: usePositionsRefetchInterval(40000) }
+  );
+  const positions = data?.data;
 
   const chainValue = filterChain || dappChain || NetworkSelectValue.All;
 
-  const positions = value?.positions;
   const items = useMemo(
     () =>
-      chainValue === NetworkSelectValue.All || !positions
-        ? positions
-        : positions.filter((position) => position.chain === chainValue),
+      positions?.filter(
+        (position) =>
+          (position.type === 'asset' ? position.is_displayable : true) &&
+          (chainValue === NetworkSelectValue.All ||
+            position.chain === chainValue)
+      ),
     [chainValue, positions]
   );
+
   const groupedPositions = groupPositionsByDapp(items);
 
   if (isLoading) {
@@ -654,6 +689,11 @@ function MultiChainPositions({
     return renderEmptyView() as JSX.Element;
   }
 
+  const chainTotalValue =
+    chainValue === NetworkSelectValue.All
+      ? portfolioDecomposition?.totalValue
+      : portfolioDecomposition?.positionsChainsDistribution[chainValue];
+
   return (
     <VStack gap={Object.keys(groupedPositions).length > 1 ? 16 : 8}>
       <div style={{ paddingInline: 16 }}>
@@ -662,23 +702,25 @@ function MultiChainPositions({
           filterChain={filterChain}
           onChange={onChainChange}
           value={
-            <NeutralDecimals
-              parts={formatCurrencyToParts(
-                getFullPositionsValue(items),
-                'en',
-                'usd'
-              )}
-            />
+            chainTotalValue ? (
+              <NeutralDecimals
+                parts={formatCurrencyToParts(chainTotalValue, 'en', currency)}
+              />
+            ) : null
           }
         />
       </div>
-      <PositionList items={items} {...positionListProps} />
+      <PositionList
+        items={items}
+        dappChain={dappChain}
+        address={address}
+        {...positionListProps}
+      />
     </VStack>
   );
 }
 
 function RawChainPositions({
-  addressParams,
   address,
   renderEmptyView,
   renderLoadingView,
@@ -688,7 +730,6 @@ function RawChainPositions({
   onChainChange,
   ...positionListProps
 }: {
-  addressParams: AddressParams;
   renderEmptyView: () => React.ReactNode;
   renderLoadingView: () => React.ReactNode;
   renderErrorView: (chainName: string) => React.ReactNode;
@@ -696,12 +737,12 @@ function RawChainPositions({
   filterChain: string | null;
   onChainChange: (value: string | null) => void;
 } & Omit<React.ComponentProps<typeof PositionList>, 'items'>) {
-  const addressParam =
-    'address' in addressParams ? addressParams.address : address;
+  const { currency } = useCurrency();
   invariant(
     filterChain !== NetworkSelectValue.All,
     'All networks filter should not show custom chain positions'
   );
+  const { networks } = useNetworks();
   const chainValue = filterChain || dappChain;
   invariant(
     chainValue,
@@ -712,16 +753,11 @@ function RawChainPositions({
     data: addressPositions,
     isLoading,
     isError,
-  } = useEvmAddressPositions({
-    address: addressParam,
-    chain,
-  });
-  if (!addressParam) {
-    return <div>Can't display this view for multiple addresss mode.</div>;
-  }
-
+  } = useEvmAddressPositions({ address, chain });
   if (isError) {
-    return renderErrorView(chainValue) as JSX.Element;
+    return renderErrorView(
+      networks?.getChainName(chain) || chainValue
+    ) as JSX.Element;
   }
   if (isLoading) {
     return renderLoadingView() as JSX.Element;
@@ -742,7 +778,7 @@ function RawChainPositions({
               parts={formatCurrencyToParts(
                 getFullPositionsValue(addressPositions),
                 'en',
-                'usd'
+                currency
               )}
             />
           }
@@ -751,6 +787,7 @@ function RawChainPositions({
       <PositionList
         address={address}
         items={addressPositions}
+        dappChain={dappChain}
         {...positionListProps}
       />
     </VStack>
@@ -766,25 +803,42 @@ export function Positions({
   filterChain: string | null;
   onChainChange: (value: string | null) => void;
 }) {
+  const { currency } = useCurrency();
   const { ready, params, singleAddressNormalized } = useAddressParams();
+  const { data, ...portfolioQuery } = useWalletPortfolio(
+    { addresses: [params.address], currency },
+    { source: useHttpClientSource() },
+    { enabled: ready }
+  );
+  const walletPortfolio = data?.data;
+  const chainValue = filterChain || dappChain || NetworkSelectValue.All;
+  const chain =
+    chainValue === NetworkSelectValue.All ? null : createChain(chainValue);
+  const positionChains = useMemo(() => {
+    const chainsSet = new Set(Object.keys(walletPortfolio?.chains || {}));
+    if (chainValue !== NetworkSelectValue.All) {
+      chainsSet.add(chainValue);
+    }
+    return Array.from(chainsSet);
+  }, [walletPortfolio, chainValue]);
+  const offsetValuesState = useStore(offsetValues);
   // Cheap perceived performance hack: render expensive Positions component later so that initial UI render is faster
   const readyToRender = useRenderDelay(16);
-  const { networks } = useNetworks();
-  if (!networks || !ready) {
+  const { networks, isLoading } = useNetworks(positionChains);
+  if (!ready) {
     return (
-      <CenteredFillViewportView maxHeight={GROWN_TAB_MAX_HEIGHT}>
-        <DelayedRender delay={2000}>
+      <CenteredFillViewportView
+        maxHeight={getGrownTabMaxHeight(offsetValuesState)}
+      >
+        <DelayedRender delay={500}>
           <ViewLoading kind="network" />
         </DelayedRender>
       </CenteredFillViewportView>
     );
   }
-  const chainValue = filterChain || dappChain || NetworkSelectValue.All;
-  const chain = createChain(chainValue);
+  const moveGasPositionToFront = chainValue !== NetworkSelectValue.All;
   const isSupportedByBackend =
-    chainValue === NetworkSelectValue.All
-      ? true
-      : networks.isSupportedByBackend(createChain(chainValue));
+    chain == null ? true : networks?.supports('positions', chain);
 
   const emptyNetworkBalance = (
     <div
@@ -806,15 +860,19 @@ export function Positions({
   );
 
   const renderEmptyViewForNetwork = () => (
-    <CenteredFillViewportView maxHeight={GROWN_TAB_MAX_HEIGHT}>
+    <CenteredFillViewportView
+      maxHeight={getGrownTabMaxHeight(offsetValuesState)}
+    >
       {emptyNetworkBalance}
       <DelayedRender delay={50}>
-        <EmptyView text="No assets yet" />
+        <EmptyView>No assets yet</EmptyView>
       </DelayedRender>
     </CenteredFillViewportView>
   );
   const renderLoadingViewForNetwork = () => (
-    <CenteredFillViewportView maxHeight={GROWN_TAB_MAX_HEIGHT}>
+    <CenteredFillViewportView
+      maxHeight={getGrownTabMaxHeight(offsetValuesState)}
+    >
       {emptyNetworkBalance}
       <DelayedRender delay={50}>
         <ViewLoading kind="network" />
@@ -822,7 +880,9 @@ export function Positions({
     </CenteredFillViewportView>
   );
   const renderErrorViewForNetwork = (chainName: string) => (
-    <CenteredFillViewportView maxHeight={GROWN_TAB_MAX_HEIGHT}>
+    <CenteredFillViewportView
+      maxHeight={getGrownTabMaxHeight(offsetValuesState)}
+    >
       {emptyNetworkBalance}
       <VStack gap={4} style={{ padding: 20, textAlign: 'center' }}>
         <span style={{ fontSize: 20 }}>💔</span>
@@ -837,28 +897,33 @@ export function Positions({
   if (isSupportedByBackend) {
     return (
       <MultiChainPositions
-        addressParams={params}
         address={singleAddressNormalized}
         dappChain={dappChain}
         filterChain={filterChain}
+        moveGasPositionToFront={moveGasPositionToFront}
         onChainChange={onChainChange}
         renderEmptyView={renderEmptyViewForNetwork}
         renderLoadingView={renderLoadingViewForNetwork}
+        portfolioDecomposition={walletPortfolio || null}
       />
     );
   } else {
-    const network = networks.getNetworkByName(chain);
-    if (!network || !network.external_id) {
-      throw new Error(`Custom network must have an external_id: ${chainValue}`);
+    if (isLoading || portfolioQuery.isLoading) {
+      return renderLoadingViewForNetwork();
+    }
+    invariant(networks, `Failed to load network info for ${chain}`);
+    const network = chain ? networks.getNetworkByName(chain) : null;
+    if (!network?.id) {
+      return renderErrorViewForNetwork(chainValue);
     }
 
     return (
       <ErrorBoundary renderError={() => renderErrorViewForNetwork(chainValue)}>
         <RawChainPositions
-          addressParams={params}
           address={singleAddressNormalized}
           dappChain={dappChain}
           filterChain={filterChain}
+          moveGasPositionToFront={moveGasPositionToFront}
           onChainChange={onChainChange}
           renderEmptyView={renderEmptyViewForNetwork}
           renderLoadingView={renderLoadingViewForNetwork}

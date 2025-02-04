@@ -3,8 +3,11 @@ import type {
   IJsonRpcConnection,
   JsonRpcPayload,
   JsonRpcResult,
-} from '@json-rpc-tools/utils';
-import { isJsonRpcError, isJsonRpcResponse } from '@json-rpc-tools/utils';
+} from '@walletconnect/jsonrpc-utils';
+import {
+  isJsonRpcError,
+  isJsonRpcResponse,
+} from '@walletconnect/jsonrpc-utils';
 
 export class Connection extends EventEmitter implements IJsonRpcConnection {
   public events = new EventEmitter();
@@ -20,6 +23,11 @@ export class Connection extends EventEmitter implements IJsonRpcConnection {
     this.broadcastChannel.addEventListener('message', (event) => {
       if (event.data?.type === 'ethereumEvent') {
         this.emit('ethereumEvent', {
+          event: event.data.event,
+          value: event.data.value,
+        });
+      } else if (event.data?.type === 'walletEvent') {
+        this.emit('walletEvent', {
           event: event.data.event,
           value: event.data.value,
         });

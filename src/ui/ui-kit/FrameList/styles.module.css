@@ -1,0 +1,30 @@
+.item {
+  --list-item-background-hover: var(--neutral-100);
+  background-color: var(--list-item-background);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+@container style(--color-scheme: dark) {
+  .item {
+    --list-item-background-hover: var(
+      --list-item-background-hover-dark,
+      --list-item-background-hover
+    );
+  }
+}
+
+@container style(--color-scheme: dark) {
+  .item {
+    --list-item-background-hover: var(
+      --list-item-background-hover-dark,
+      --list-item-background-hover
+    );
+  }
+}
+
+@media (hover: hover) {
+  .item:hover {
+    background-color: var(--list-item-background-hover);
+  }
+}

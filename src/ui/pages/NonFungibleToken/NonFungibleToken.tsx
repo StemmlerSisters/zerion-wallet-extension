@@ -1,12 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { Background } from 'src/ui/components/Background';
 import { NavigationTitle } from 'src/ui/components/NavigationTitle';
 import { PageBottom } from 'src/ui/components/PageBottom';
 import { PageColumn } from 'src/ui/components/PageColumn';
 import { PageStickyFooter } from 'src/ui/components/PageStickyFooter';
-import { dnaServicePort } from 'src/ui/shared/channels';
+import { dnaServicePort, walletPort } from 'src/ui/shared/channels';
 import { useAddressParams } from 'src/ui/shared/user-address/useAddressParams';
 import { Button } from 'src/ui/ui-kit/Button';
 import { CircleSpinner } from 'src/ui/ui-kit/CircleSpinner';
@@ -17,11 +17,24 @@ import { TextAnchor } from 'src/ui/ui-kit/TextAnchor';
 import { UIText } from 'src/ui/ui-kit/UIText';
 import { UnstyledAnchor } from 'src/ui/ui-kit/UnstyledAnchor';
 import { VStack } from 'src/ui/ui-kit/VStack';
+import type { SignMsgBtnHandle } from 'src/ui/components/SignMessageButton';
+import { SignMessageButton } from 'src/ui/components/SignMessageButton';
+import { invariant } from 'src/shared/invariant';
+import { INTERNAL_ORIGIN } from 'src/background/constants';
+import { useCurrency } from 'src/modules/currency/useCurrency';
+import { UnstyledLink } from 'src/ui/ui-kit/UnstyledLink';
+import ArrowLeftTop from 'jsx:src/ui/assets/arrow-left-top.svg';
+import { txErrorToMessage } from '../SendTransaction/shared/transactionErrorToMessage';
 import { useAddressNftPosition } from './useAddressNftPosition';
 
 export function NonFungibleToken() {
   const { asset_code, chain } = useParams();
   const { singleAddress } = useAddressParams();
+  const { data: wallet } = useQuery({
+    queryKey: ['wallet/uiGetCurrentWallet'],
+    queryFn: () => walletPort.request('uiGetCurrentWallet'),
+    useErrorBoundary: true,
+  });
 
   const [contract_address, token_id] = useMemo(
     () => asset_code?.split(':') || [],
@@ -30,37 +43,63 @@ export function NonFungibleToken() {
 
   // for optimistic update the dna's status after promotion
   const [promotedPrimary, setPromotedAsPrimary] = useState(false);
+  const { currency } = useCurrency();
 
   const { value: nft } = useAddressNftPosition({
     chain: chain || '',
     contract_address,
     token_id,
-    currency: 'usd',
+    currency,
     address: singleAddress,
   });
 
-  const url = useMemo(() => {
+  const links = useMemo(() => {
     if (!nft?.chain || !nft.contract_address || !nft.token_id) {
       return null;
     }
-    const urlObject = new URL(
+    const webAppUrlObject = new URL(
       `https://app.zerion.io/nfts/${nft.chain}/${nft.contract_address}:${nft.token_id}`
     );
     if (singleAddress) {
-      urlObject.searchParams.append('address', singleAddress);
+      webAppUrlObject.searchParams.append('address', singleAddress);
     }
-    return urlObject.toString();
+    const sendFormParams = new URLSearchParams({
+      type: 'nft',
+      nftContractAddress: nft.contract_address,
+      nftId: nft.token_id,
+      tokenChain: nft.chain,
+      // nftChain: nft.chain, // nftChain is synced with tokenChain
+    });
+    return {
+      webAppLink: webAppUrlObject.toString(),
+      sendFormLink: `/send-form?${sendFormParams.toString()}`,
+    };
   }, [singleAddress, nft]);
 
-  const { mutate: promoteTokenMutation, isLoading } = useMutation({
+  const signMsgBtnRef = useRef<SignMsgBtnHandle | null>(null);
+
+  const { mutate: promoteToken, ...promoteTokenMutation } = useMutation({
     mutationFn: async () => {
       if (!nft?.collection.name) {
         return;
       }
+      const collectionName = nft.collection.name;
+      const tokenName = nft.token_id;
+      const { message, actionId } = await dnaServicePort.request(
+        'getPromoteDnaSigningMessage',
+        { collectionName, tokenName }
+      );
+      invariant(signMsgBtnRef.current, 'SignMessageButton not found');
+      const signature = await signMsgBtnRef.current.personalSign({
+        params: [message],
+        initiator: INTERNAL_ORIGIN,
+        clientScope: null,
+      });
       await dnaServicePort.request('promoteDnaToken', {
         address: singleAddress,
-        collectionName: nft.collection.name,
-        tokenName: nft.token_id,
+        actionId,
+        signature,
+        tokenName,
       });
       return;
     },
@@ -142,35 +181,73 @@ export function NonFungibleToken() {
               </VStack>
             ) : null}
             {nftTags.has('#dna') ? (
-              <Button
-                disabled={isPrimary || isLoading}
-                onClick={() => promoteTokenMutation()}
-              >
-                <HStack gap={8} alignItems="center" justifyContent="center">
-                  <div>{isPrimary ? 'Active' : 'Set as Active'}</div>
-                  {isLoading ? <CircleSpinner /> : null}
-                </HStack>
-              </Button>
+              <VStack gap={8}>
+                {promoteTokenMutation.isError ? (
+                  <UIText kind="body/regular" color="var(--negative-500)">
+                    {txErrorToMessage(promoteTokenMutation.error)}
+                  </UIText>
+                ) : null}
+                {!wallet ? null : isPrimary ? (
+                  <Button disabled={true}>Active</Button>
+                ) : (
+                  <SignMessageButton
+                    ref={signMsgBtnRef}
+                    wallet={wallet}
+                    onClick={() => promoteToken()}
+                    buttonTitle={
+                      <HStack
+                        gap={8}
+                        alignItems="center"
+                        justifyContent="center"
+                      >
+                        <div>Set as Active</div>
+                        {promoteTokenMutation.isLoading ? (
+                          <CircleSpinner />
+                        ) : null}
+                      </HStack>
+                    }
+                    disabled={promoteTokenMutation.isLoading}
+                    holdToSign={false}
+                  />
+                )}
+              </VStack>
             ) : null}
           </VStack>
         ) : null}
         <Spacer height={24} />
       </PageColumn>
-      {url ? (
+      {links ? (
         <PageStickyFooter
           lineColor="var(--neutral-300)"
           style={{ backgroundColor: 'var(--white)' }}
         >
           <Spacer height={24} />
-          <Button
-            as={UnstyledAnchor}
-            href={url}
-            target="_blank"
-            kind="regular"
-            style={{ width: '100%' }}
+          <HStack
+            gap={8}
+            alignItems="center"
+            style={{ gridTemplateColumns: '1fr 1fr' }}
           >
-            Open in Zerion Web
-          </Button>
+            <Button
+              as={UnstyledAnchor}
+              href={links.webAppLink}
+              target="_blank"
+              kind="regular"
+              style={{ width: '100%' }}
+            >
+              <HStack gap={8} alignItems="center">
+                <span>Zerion Web</span>
+                <ArrowLeftTop />
+              </HStack>
+            </Button>
+            <Button
+              as={UnstyledLink}
+              to={links.sendFormLink}
+              kind="primary"
+              style={{ width: '100%' }}
+            >
+              Send NFT
+            </Button>
+          </HStack>
           <PageBottom />
         </PageStickyFooter>
       ) : null}
