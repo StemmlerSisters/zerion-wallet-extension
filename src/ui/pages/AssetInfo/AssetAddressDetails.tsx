@@ -47,7 +47,6 @@ import * as styles from './styles.module.css';
 type PremiumStatus = {
   isPremium: boolean;
   isLoading: boolean;
-  isSupported: boolean;
 };
 
 type AssetAddressPnlQuery = UseQueryResult<
@@ -184,13 +183,11 @@ function AssetStats({
   assetAddressPnlQuery,
   walletAssetDetails,
   premiumStatus,
-  pnlIsSupported,
 }: {
   assetFullInfo: AssetFullInfo;
   assetAddressPnlQuery: AssetAddressPnlQuery;
   walletAssetDetails: WalletAssetDetails;
   premiumStatus: PremiumStatus;
-  pnlIsSupported: boolean;
 }) {
   const { currency } = useCurrency();
   const { data, isLoading } = assetAddressPnlQuery;
@@ -231,7 +228,7 @@ function AssetStats({
         }
         valueColor={return24h != null ? getColor(return24h) : undefined}
       />
-      {!pnlIsSupported ? null : premiumStatus.isPremium ? (
+      {premiumStatus.isPremium ? (
         <>
           <StatLine
             title="Total PnL"
@@ -323,7 +320,7 @@ function AssetStats({
             isLoading={isLoading}
           />
         </>
-      ) : premiumStatus.isSupported ? (
+      ) : (
         <StatLine
           title="Asset PnL & More"
           value={() => (
@@ -338,7 +335,7 @@ function AssetStats({
             </UnstyledAnchor>
           )}
         />
-      ) : null}
+      )}
     </VStack>
   );
 }
@@ -583,14 +580,12 @@ function AssetImplementationsDialogContent({
   walletAssetDetails,
   assetAddressPnlQuery,
   premiumStatus,
-  pnlIsSupported,
 }: {
   address: string;
   assetFullInfo: AssetFullInfo;
   walletAssetDetails: WalletAssetDetails;
   assetAddressPnlQuery: AssetAddressPnlQuery;
   premiumStatus: PremiumStatus;
-  pnlIsSupported: boolean;
 }) {
   return (
     <VStack
@@ -611,7 +606,6 @@ function AssetImplementationsDialogContent({
           assetAddressPnlQuery={assetAddressPnlQuery}
           walletAssetDetails={walletAssetDetails}
           premiumStatus={premiumStatus}
-          pnlIsSupported={pnlIsSupported}
         />
         <Line />
         {walletAssetDetails.chainsDistribution?.length ? (
@@ -728,7 +722,7 @@ function AssetRegularAddressShortStats({
       }}
       alignItems="start"
     >
-      {!premiumStatus.isPremium && premiumStatus.isSupported ? (
+      {!premiumStatus.isPremium ? (
         <VStack gap={4}>
           <UIText kind="caption/regular" color="var(--neutral-500)">
             Unrealised PnL
@@ -772,7 +766,6 @@ export function AssetAddressStats({
   walletAssetDetails,
   assetAddressPnlQuery,
   premiumStatus,
-  pnlIsSupported,
 }: {
   address: string;
   assetFullInfo: AssetFullInfo;
@@ -780,7 +773,6 @@ export function AssetAddressStats({
   walletAssetDetails: WalletAssetDetails;
   assetAddressPnlQuery: AssetAddressPnlQuery;
   premiumStatus: PremiumStatus;
-  pnlIsSupported: boolean;
 }) {
   const dialogRef = useRef<HTMLDialogElementInterface | null>(null);
   const { currency } = useCurrency();
@@ -902,7 +894,7 @@ export function AssetAddressStats({
             )}
             {premiumStatus.isLoading ? (
               <Spacer height={44} />
-            ) : premiumStatus.isPremium && pnlIsSupported ? (
+            ) : premiumStatus.isPremium ? (
               <AssetPremiumAddressShortStats
                 assetAddressPnlQuery={assetAddressPnlQuery}
                 walletAssetDetails={walletAssetDetails}
@@ -970,7 +962,6 @@ export function AssetAddressStats({
               walletAssetDetails={walletAssetDetails}
               assetAddressPnlQuery={assetAddressPnlQuery}
               premiumStatus={premiumStatus}
-              pnlIsSupported={pnlIsSupported}
             />
           </>
         )}
