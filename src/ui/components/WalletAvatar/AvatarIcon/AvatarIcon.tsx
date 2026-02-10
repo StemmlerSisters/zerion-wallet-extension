@@ -69,6 +69,13 @@ export function AvatarIcon({
             alt={`${nft.metadata.name} image`}
             forcePreview={size <= 40 || mediaContent.type === 'audio'}
             onReady={onReady}
+            renderUnsupportedContent={() => (
+              <BlockieImg
+                address={address}
+                size={imageSize}
+                borderRadius={imageBorderRadius}
+              />
+            )}
           />
         ) : (
           <BlockieImg

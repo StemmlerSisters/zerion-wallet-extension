@@ -61,6 +61,7 @@ export function MediaContent({
   className,
   forcePreview,
   onReady,
+  renderUnsupportedContent,
 }: {
   content?: MediaContentValue;
   alt: string;
@@ -70,6 +71,7 @@ export function MediaContent({
   className?: string;
   forcePreview?: boolean;
   onReady?(): void;
+  renderUnsupportedContent?(): React.ReactNode;
 }) {
   if (forcePreview && content?.image_preview_url) {
     return (
@@ -125,25 +127,25 @@ export function MediaContent({
       />
     );
   }
-  if (content?.image_url) {
+  if (content?.image_url || content?.image_preview_url) {
+    const imageSrc = content.image_url || content.image_preview_url || 'no-image';
     return (
       <Image
         // safari doesn't emit img onError for empty string src
-        src={content.image_url || 'no-image'}
+        src={imageSrc}
         alt={alt}
         style={style}
         className={className}
         renderError={() => (
-          <MediaError style={errorStyle} src={content.image_url} />
+          <MediaError style={errorStyle} src={imageSrc} />
         )}
         renderLoading={renderLoading}
         onReady={onReady}
       />
     );
   }
-  return (
-    <UIText kind="body/regular" className={className}>
-      Unsupported content
-    </UIText>
-  );
+  if (renderUnsupportedContent) {
+    return <>{renderUnsupportedContent()}</>;
+  }
+  return <MediaError image="🖼️" style={errorStyle} src={null} />;
 }
