@@ -20,7 +20,10 @@ import { isTruthy } from 'is-truthy-ts';
 import { createChain } from 'src/modules/networks/Chain';
 import type { NetworkConfig } from 'src/modules/networks/NetworkConfig';
 import { Networks as NetworksModule } from 'src/modules/networks/Networks';
-import { getNetworksStore } from 'src/modules/networks/networks-store.client';
+import {
+  mainNetworksStore,
+  testenvNetworksStore,
+} from 'src/modules/networks/networks-store.client';
 import { useNetworks } from 'src/modules/networks/useNetworks';
 import { invariant } from 'src/shared/invariant';
 import {
@@ -72,8 +75,10 @@ import { NetworkList } from './shared/NetworkList';
 import { NetworkForm } from './NetworkForm';
 
 async function updateNetworks() {
-  const networksStore = await getNetworksStore();
-  networksStore.update();
+  return Promise.all([
+    mainNetworksStore.update(),
+    testenvNetworksStore.update(),
+  ]);
 }
 
 type SaveChainConfigParams = {
@@ -166,6 +171,7 @@ const FORBIDDEN_FIELDS = new Set([
   'chainId',
   'nativeCurrency.decimals',
   'hidden',
+  'is_testnet',
 ]);
 
 function RemoveNetworkConfirmationDialog({
@@ -205,7 +211,7 @@ function NetworkPage() {
   invariant(chainStr, 'chain parameter is required for this view');
   const navigate = useNavigate();
   const goBack = useCallback(() => navigate(-1), [navigate]);
-  const { networks } = useNetworks();
+  const { networks, isStale } = useNetworks();
   const network = networks?.getNetworkByName(createChain(chainStr));
   const dialogRef = useRef<HTMLDialogElementInterface | null>(null);
 
@@ -273,7 +279,7 @@ function NetworkPage() {
     onSuccess: goBack,
   });
   useBackgroundKind({ kind: 'white' });
-  if (!networks && !network) {
+  if ((!networks && !network) || isStale) {
     return <ViewLoading kind="network" />;
   } else if (!network) {
     throw new Response(null, { status: 404, statusText: 'Page Not Found' });
