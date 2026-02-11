@@ -17,7 +17,6 @@ import { UIText } from 'src/ui/ui-kit/UIText';
 import { UnstyledButton } from 'src/ui/ui-kit/UnstyledButton';
 import { usePreferences } from 'src/ui/features/preferences';
 import type { NetworkConfig } from 'src/modules/networks/NetworkConfig';
-import { NBSP } from 'src/ui/shared/typography';
 import type { BlockchainType } from 'src/shared/wallet/classifiers';
 import { Networks } from 'src/modules/networks/Networks';
 import { NetworkId } from 'src/modules/networks/NetworkId';
@@ -189,9 +188,27 @@ export function NetworkBalance({
 
   if (isLoading) {
     return (
-      <UIText kind={textKind} style={{ width: '100%' }}>
-        {NBSP}
-      </UIText>
+      <HStack
+        gap={4}
+        alignItems="center"
+        style={{
+          gridTemplateColumns: showHelperButton
+            ? hasValue
+              ? 'minmax(130px, max-content) minmax(40px, max-content)'
+              : 'minmax(50px, max-content) minmax(40px, max-content)'
+            : '1fr',
+          width: '100%',
+        }}
+      >
+        <div
+          style={{
+            height: 24,
+            width: 150,
+            backgroundColor: 'var(--neutral-200)',
+            borderRadius: '8px',
+          }}
+        />
+      </HStack>
     );
   }
 
