@@ -1,7 +1,6 @@
 import React, { useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import ArrowCircleIcon from 'jsx:src/ui/assets/arrow-circle-outlined.svg';
-import { EmptyView } from 'src/ui/components/EmptyView';
 import { usePreferences } from 'src/ui/features/preferences';
 import { walletPort } from 'src/ui/shared/channels';
 import { Button } from 'src/ui/ui-kit/Button';
@@ -33,7 +32,14 @@ export function EmptyPositionsViewNew() {
   const isTestnetMode = preferences?.testnetMode?.on;
 
   if (isTestnetMode || !wallet) {
-    return <EmptyView>No assets yet</EmptyView>;
+    return (
+      <VStack gap={6} style={{ textAlign: 'center', padding: 20 }}>
+        <UIText kind="headline/hero">🥺</UIText>
+        <UIText kind="small/accent" color="var(--neutral-500)">
+          No assets yet
+        </UIText>
+      </VStack>
+    );
   }
 
   return (
@@ -45,6 +51,7 @@ export function EmptyPositionsViewNew() {
           paddingInline: 16,
           textAlign: 'center',
           marginTop: 32,
+          paddingBottom: 48,
         }}
       >
         <VStack gap={12} style={{ justifyItems: 'center' }}>

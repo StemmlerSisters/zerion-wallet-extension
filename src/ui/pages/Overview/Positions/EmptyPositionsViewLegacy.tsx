@@ -3,7 +3,6 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { normalizeAddress } from 'src/shared/normalizeAddress';
 import { getAddressType } from 'src/shared/wallet/classifiers';
-import { EmptyView } from 'src/ui/components/EmptyView';
 import { usePreferences } from 'src/ui/features/preferences';
 import { walletPort } from 'src/ui/shared/channels';
 import { setCurrentAddress } from 'src/ui/shared/requests/setCurrentAddress';
@@ -73,7 +72,14 @@ export function EmptyPositionsViewLegacy() {
   });
 
   if (isTestnetMode || !wallet || goToBridgeMutation.isLoading || isLoading) {
-    return <EmptyView>No assets yet</EmptyView>;
+    return (
+      <VStack gap={6} style={{ textAlign: 'center', padding: 20 }}>
+        <UIText kind="headline/hero">🥺</UIText>
+        <UIText kind="small/accent" color="var(--neutral-500)">
+          No assets yet
+        </UIText>
+      </VStack>
+    );
   }
 
   return (
@@ -83,6 +89,7 @@ export function EmptyPositionsViewLegacy() {
         justifyItems: 'stretch',
         paddingInline: 16,
         textAlign: 'center',
+        paddingBottom: 48,
       }}
     >
       <VStack gap={12} style={{ justifyItems: 'center' }}>
