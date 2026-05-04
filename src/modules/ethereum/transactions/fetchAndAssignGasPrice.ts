@@ -111,7 +111,10 @@ export async function prepareGasAndNetworkFee<T extends IncomingTransaction>(
         }),
   ]);
   return produce(transaction, (draft) => {
-    if (gas && gas > Number(getGas(transaction))) {
+    if (
+      gas &&
+      (getGas(transaction) == null || gas > Number(getGas(transaction)))
+    ) {
       delete draft.gas;
       draft.gasLimit = gas;
     }
